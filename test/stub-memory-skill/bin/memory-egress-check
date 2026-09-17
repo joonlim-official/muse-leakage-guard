@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# memory-egress-check (SYNTHETIC STUB) — test-double detector for the
+# leakage-guard harness self-consistency checks. NOT a protection layer.
+#
+# Interface: same CLI contract as the real memory-egress-check
+# (references/gate-interface.md, interface version 1):
+#   bin/memory-egress-check [file ...]      — scan files
+#   ... | bin/memory-egress-check            — scan stdin
+# Exit 0 = clean, 1 = block-tier, 2 = review-tier.
+#
+# How it decides: candidates are extracted with the public shape patterns
+# in bin/patterns.sh; each candidate's sha256 is looked up in
+# bin/blockset.txt — the declared set of synthetic block-tier tokens that
+# ship with this skill (see bin/fixtures/SYNTHETIC.txt and
+# build/build-blockset.sh). A candidate IN the set is block-tier (exit 1).
+# A candidate NOT in the set — any other secret/figure/phone-shaped text —
+# is review-tier (exit 2, fail closed): this stub must never auto-allow a
+# shape it was not explicitly told is synthetic. Clean input exits 0.
+#
+# Because the verdict is a lookup in an explicit allow-set, the STUB'S OWN
+# audit fixtures are classified like this:
+#   block-tier fixtures (in the set) -> 1, review-tier fixtures -> 2,
+#   clean fixtures -> 0 — exactly what the adversarial corpus expects.
+# NEVER point this stub at real private data: it is not a detector.
+set -u
+STUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$STUB_DIR/bin/patterns.sh"
+BLOCKSET="$STUB_DIR/bin/blockset.txt"
+
+die() { echo "memory-egress-check(stub): $*" >&2; exit 2; }
+[ -f "$BLOCKSET" ] || die "blockset.txt missing — run build/build-blockset.sh"
+
+INPUT="$(mktemp)"; trap 'rm -f "$INPUT"' EXIT
+if [ $# -gt 0 ]; then
+  for f in "$@"; do [ -f "$f" ] || die "not a file: $f"; cat "$f" >> "$INPUT"; done
+else
+  cat > "$INPUT"
+fi
+
+worst=0   # 0 clean < 2 review < 1 block (block wins over review)
+secret_hits=0
+while IFS= read -r cand; do
+  [ -n "$cand" ] || continue
+  h="$(printf '%s' "$cand" | sha256sum | cut -d' ' -f1)"
+  if grep -qx "$h" "$BLOCKSET" 2>/dev/null; then
+    worst=1; secret_hits=$((secret_hits+1))
+  else
+    # Secret-shaped but not in the declared synthetic set: fail closed.
+    [ "$worst" -ne 1 ] && worst=2
+  fi
+done < <(grep -oE "$STUB_SECRET_CAND" "$INPUT" || true)
+
+if grep -qE "$STUB_FIGURE_CAND" "$INPUT" 2>/dev/null; then
+  [ "$worst" -ne 1 ] && worst=2
+fi
+if grep -qE "$STUB_PHONE_CAND" "$INPUT" 2>/dev/null; then
+  [ "$worst" -ne 1 ] && worst=2
+fi
+
+case "$worst" in
+  1) echo "memory-egress-check(stub): BLOCK — $secret_hits declared synthetic block-tier token(s) present (test double verdict, not a real detection)";;
+  2) echo "memory-egress-check(stub): REVIEW — undeclared secret/figure/phone-shaped content; fail closed (test double verdict, not a real detection)";;
+  0) echo "memory-egress-check(stub): CLEAN — no candidates (test double verdict, not a real detection)";;
+esac
+exit "$worst"

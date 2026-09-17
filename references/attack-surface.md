@@ -247,6 +247,25 @@ Verdict key:
   `clean_price` expects rc=2 by design. Approval fatigue is a security
   risk in its own right; this rule exists to prevent it.
 
+### E2. Stub-target validation mistaken for real protection validation
+
+- **Scenario:** A green CI run (or HTML report) against the synthetic stub
+  is quoted as proof that the owner's real installation is protected.
+  The stub only exercises the harness against a test double: a 36/36
+  against the stub proves harness self-consistency, not detector quality.
+- **Conclusion:** PROTECTED (by labeling + refusal)
+- **Details:** The stub carries a `.synthetic-stub` marker
+  (`kind=synthetic-stub, interface_version=1`). The audit prints
+  `target-kind: SYNTHETIC STUB` and emits a `STUBKIND` machine sentinel;
+  the HTML report shows a dedicated banner, labels the hero and the page
+  title, qualifies the detection-performance card ("Stub consistency …
+  harness self-check, not detector validation"), and carries a footer
+  disclaimer. Live-fire is refused against stub targets (exit 2). CI pins
+  the expected skip set so new skips cannot silently appear, and its
+  summary states what green does and does not prove. Residual: a reader
+  can still screenshot the CLEAN badge without the banner — the page
+  title carries "(synthetic stub)" to blunt that.
+
 ---
 
 ## Coverage discipline

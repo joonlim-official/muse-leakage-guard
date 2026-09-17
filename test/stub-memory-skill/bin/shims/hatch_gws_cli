@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# hatch_gws_cli (SYNTHETIC STUB shim) — mirrors the interception contract of
+# the real gmail/drive shim for harness self-consistency checks.
+# Interface version 1 (see ../../../references/gate-interface.md):
+#   gmail +send|+reply|+forward [--to T] [--subject S] [--body B]
+#       --draft/--dry-run pass through UNGATED (never leave the account)
+#   gmail users messages send --params '{"raw":"<base64url MIME>"}'
+#       -> the MIME is base64-decoded and gated before delegation
+#   drive permissions create -> refused (rc=2) unless approved
+#   everything else passes straight through to the delegate
+# Delegates to $MOCHI_REAL_HATCH_GWS_CLI, else the next hatch_gws_cli on
+# PATH after this shim's own directory. No delegate -> exit 127.
+# This is a test double for harness self-consistency checks — it is not a
+# protection layer.
+set -u
+SHIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE_DIR="$(cd "$SHIM_DIR/.." && pwd)"   # .../bin, where egress-gate lives
+
+REAL="${MOCHI_REAL_HATCH_GWS_CLI:-}"
+if [ -z "$REAL" ]; then
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ "$d" = "$SHIM_DIR" ] && continue
+    if [ -x "$d/hatch_gws_cli" ]; then REAL="$d/hatch_gws_cli"; break; fi
+  done <<< "${PATH//:/$'\n'}"
+fi
+[ -n "$REAL" ] || { echo "stub-shim: real hatch_gws_cli not found on PATH" >&2; exit 127; }
+
+pass_through() { exec "$REAL" "$@"; }
+
+gate_file() { # <content-file> <context> <delegate args...> — gates, cleans up, delegates or exits
+  local f="$1" ctx="$2" rc=0
+  shift 2
+  "$GATE_DIR/egress-gate" --content-file "$f" --context "$ctx" || rc=$?
+  rm -f "$f"
+  [ "$rc" -eq 0 ] && pass_through "$@"
+  exit "$rc"
+}
+
+# --- drive permissions create: granting OTHERS access is never a free-share zone
+if [ "${1:-}" = "drive" ]; then
+  hit_p=0; hit_c=0
+  for a in "$@"; do
+    [ "$a" = "permissions" ] && hit_p=1
+    [ "$a" = "create" ] && hit_c=1
+  done
+  if [ "$hit_p" -eq 1 ] && [ "$hit_c" -eq 1 ]; then
+    if [ "${MOCHI_EGRESS_APPROVED:-0}" = "1" ]; then pass_through "$@"; fi
+    echo "stub-shim: sharing a Drive file with others needs explicit approval — refused (stub)." >&2
+    exit 2
+  fi
+  pass_through "$@"
+fi
+
+if [ "${1:-}" = "gmail" ]; then
+  sub="${2:-}"
+  case "$sub" in
+    +send|+reply|+forward)
+      # drafts and dry-runs never leave the account: not gated
+      for a in "$@"; do
+        case "$a" in --draft|--dry-run) pass_through "$@";; esac
+      done
+      subject=""; body=""; to=""; prev=""
+      for a in "$@"; do
+        case "$a" in
+          --subject=*) subject="${a#--subject=}"; prev="";;
+          --body=*)    body="${a#--body=}";       prev="";;
+          --to=*)      to="${a#--to=}";           prev="";;
+          --subject) prev=subj;;
+          --body)    prev=body;;
+          --to)      prev=to;;
+          *) case "$prev" in
+               subj) subject="$a";;
+               body) body="$a";;
+               to)   to="$a";;
+             esac; prev="";;
+        esac
+      done
+      tmp="$(mktemp)"
+      printf 'subject: %s\n\n%s\n' "$subject" "$body" > "$tmp"
+      gate_file "$tmp" "gmail $sub to ${to:-unknown} (stub)" "$@"
+      ;;
+    users)
+      hit_m=0; hit_s=0
+      for a in "$@"; do
+        [ "$a" = "messages" ] && hit_m=1
+        [ "$a" = "send" ] && hit_s=1
+      done
+      if [ "$hit_m" -eq 1 ] && [ "$hit_s" -eq 1 ]; then
+        payload=""; prev=""
+        for a in "$@"; do
+          case "$a" in
+            --json=*)   payload="${a#--json=}";   prev="";;
+            --params=*) payload="${a#--params=}"; prev="";;
+            --json|--params) prev=p;;
+            *) [ "$prev" = "p" ] && { payload="$a"; prev=""; };;
+          esac
+        done
+        tmp="$(mktemp)"
+        if [ -n "$payload" ]; then
+          if ! python3 - "$payload" > "$tmp" 2>/dev/null <<'PYEOF'
+import sys, json, base64
+p = sys.argv[1]
+try:
+    d = json.loads(p)
+except Exception:
+    sys.stdout.write(p); sys.exit(0)
+raw = d.get("raw") or ""
+if raw:
+    pad = "=" * (-len(raw) % 4)
+    try:
+        sys.stdout.write(base64.urlsafe_b64decode(raw + pad).decode("utf-8", "replace"))
+    except Exception:
+        sys.stdout.write(p)
+else:
+    sys.stdout.write(p)
+PYEOF
+          then
+            printf '%s' "$payload" > "$tmp"
+          fi
+        else
+          printf '(no payload captured)' > "$tmp"
+        fi
+        gate_file "$tmp" "gmail users messages send (raw, stub)" "$@"
+      fi
+      pass_through "$@"
+      ;;
+  esac
+fi
+pass_through "$@"

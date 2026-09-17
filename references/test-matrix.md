@@ -6,6 +6,16 @@ Every check in `bin/leakage-audit` maps to an attack-surface row
 `sk-testfakekey…`, `415-555-0132` — shaped to trip the detectors,
 belonging to nobody.
 
+**Target-kind note.** When the audit runs against the synthetic stub
+(`test/stub-memory-skill/`, labeled `target-kind: SYNTHETIC STUB`), the
+"Proves" column below should be read as "the harness exercises this
+contract against the test double" — a green run proves the harness is
+self-consistent, not that any real installation is protected. Only a run
+against the real installation speaks to protection. The stub's detector
+classifies by lookup in a declared set of synthetic tokens
+(`test/stub-memory-skill/build/build-blockset.sh`); it is a test double,
+never a protection layer.
+
 ## A. Installation integrity
 
 | Check | Proves |
@@ -98,3 +108,4 @@ without a mapped check is a finding, not an oversight.
 | D2 figures written to memory | APPROVAL-GATED | C: memory-audit opt-in; `memory-guard` flags figures for review |
 | D3 memory read by unauthorized party | PROTECTED (platform) | platform boundary — no in-repo mechanical test possible; documented here |
 | E1 public info treated as private | anti-over-gating | B: clean → exit 0; adversarial-run false-positive traps; public-number allowlist |
+| E2 stub-target validation mistaken for real protection | PROTECTED (labeling + refusal) | A: `target-kind: SYNTHETIC STUB` + STUBKIND sentinel; report banner/title/footer; live-fire refused vs stub; CI pins skip set |

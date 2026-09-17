@@ -108,3 +108,18 @@ summary table to a stacked layout on narrow screens.
   binaries; Drive share tests stay simulated. Do not enable live-fire
   during validation of changes — validate in simulated mode only.
 - All public examples are synthetic and impersonal, per policy.
+- **Synthetic stub target.** `test/stub-memory-skill/` is a test double
+  with the same gate/shim interface (contract:
+  `references/gate-interface.md`) — no private installation needed to
+  validate the harness. The audit labels it `target-kind: SYNTHETIC STUB`
+  (machine sentinel `STUBKIND`), refuses live-fire against it, and the
+  report banners it; a 36/36 against the stub proves harness
+  self-consistency, not detector quality. Its detector classifies by
+  lookup in a declared set of synthetic tokens
+  (`build/build-blockset.sh`; `--check` in CI) — it is not a protection
+  layer and must never be deployed as one.
+- **CI.** `.github/workflows/validate.yml` runs the audit + adversarial
+  suite against the stub on PRs and pushes to `main` (`pull_request`,
+  never `pull_request_target`; `contents: read`; SHA-pinned actions;
+  shallow checkout; no secrets; live-fire variables refused). Green CI
+  proves harness self-consistency only.

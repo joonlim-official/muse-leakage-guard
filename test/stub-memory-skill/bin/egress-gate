@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# egress-gate (SYNTHETIC STUB) — shim-facing gate for the stub skill.
+# Same CLI contract as the real gate (references/gate-interface.md,
+# interface version 1): scans --content-file (or stdin) through
+# bin/memory-egress-check and applies the MOCHI_EGRESS_APPROVED=1
+# override for review-tier. This is a test double for harness
+# self-consistency checks — it is not a protection layer.
+set -u
+STUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONTENT=""; APPROVED=0; CTX=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --content-file) CONTENT="$2"; shift 2;;
+    --context) CTX="$2"; shift 2;;
+    --approved) APPROVED=1; shift;;
+    *) shift;;
+  esac
+done
+[ "${MOCHI_EGRESS_APPROVED:-}" = "1" ] && APPROVED=1
+if [ -n "$CONTENT" ]; then
+  "$STUB_DIR/bin/memory-egress-check" "$CONTENT" >/dev/null 2>&1; RC=$?
+else
+  "$STUB_DIR/bin/memory-egress-check" >/dev/null 2>&1; RC=$?
+fi
+if [ "$RC" -eq 1 ]; then
+  echo "egress-gate(stub): BLOCK — block-tier content (${CTX:-no context})" >&2
+  exit 1
+fi
+if [ "$RC" -eq 2 ] && [ "$APPROVED" -ne 1 ]; then
+  echo "egress-gate(stub): REVIEW — approval required (${CTX:-no context})" >&2
+  exit 2
+fi
+exit 0

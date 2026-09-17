@@ -59,6 +59,12 @@ fi
 unset _v _kv _saved_vars
 
 MEM_SKILL="${PERSONAL_MEMORY_SKILL:-$HOME/workspace/skills/personal-memory-system}"
+# Target kind: a synthetic stub (test/stub-memory-skill/.synthetic-stub)
+# is a harness self-consistency double, not the owner's installation.
+# It is labelled as such in the header, the machine sentinels, and the
+# HTML report — and live-fire is refused against it (see below).
+STUBKIND=""
+if [ -f "$MEM_SKILL/.synthetic-stub" ]; then STUBKIND="synthetic-stub"; fi
 export PERSONAL_MEMORY_ROOT="${PERSONAL_MEMORY_ROOT:-$HOME}"
 AGENTS_FILE="${MOCHI_AGENTS_FILE:-$HOME/AGENTS.md}"
 CRON_DIRS="${MOCHI_CRON_PROMPT_DIRS:-}"
@@ -79,6 +85,11 @@ if [ "${_LIVE_FIRE_ENV:-}" != "1" ] && [ "${MOCHI_LIVE_FIRE:-}" = "1" ]; then
 fi
 unset _LIVE_FIRE_ENV
 if [ "${MOCHI_LIVE_FIRE:-}" = "1" ]; then
+  if [ "$STUBKIND" = "synthetic-stub" ]; then
+    echo "leakage-audit: refusing live-fire against a synthetic stub target ($MEM_SKILL)." >&2
+    echo "leakage-audit: live-fire exercises the real end-to-end path; point PERSONAL_MEMORY_SKILL at the real installation." >&2
+    exit 2
+  fi
   if { [ -n "${CI:-}" ] || [ ! -t 0 ]; } && [ "${MOCHI_LIVE_FIRE_NONINTERACTIVE:-}" != "1" ]; then
     echo "leakage-audit: refusing live-fire in a non-interactive context (stdin is not a TTY or \$CI is set)." >&2
     echo "leakage-audit: set MOCHI_LIVE_FIRE_NONINTERACTIVE=1 to override explicitly." >&2
@@ -122,13 +133,14 @@ msent() {
 wcheck() {
   printf '%s\n' "$*" | fold -s -w "$((WIDTH-4))" | sed 's/ *$//' | sed '1s/^/  /; 2,$s/^/    /'
 }
-# Wrapped detail line: hard break so evidence never scrolls sideways.
+# Wrapped detail line: word-aware wrap (screen-reader friendly); overlong
+# tokens are still broken so evidence never scrolls sideways.
 # Reads stdin or args; each logical line wraps independently.
 wdetail() {
   { if [ $# -gt 0 ]; then printf '%s\n' "$*"; else cat; fi; } \
     | while IFS= read -r line; do
         msent "CTX $line"
-        printf '%s\n' "$line" | fold -w "$((WIDTH-6))" | sed 's/ *$//' | sed '1s/^/    /; 2,$s/^/      /'
+        printf '%s\n' "$line" | fold -s -w "$((WIDTH-6))" | sed 's/ *$//' | sed '1s/^/    /; 2,$s/^/      /'
       done
 }
 
@@ -172,8 +184,12 @@ print_header() {
   printf '\n  muse-leakage-guard · leakage-audit\n'
   printf '  %s\n' "$(date '+%Y-%m-%d %H:%M %Z')"
   msent "TS $(date '+%Y-%m-%d %H:%M %Z')"
-  printf '%s\n' "target: $(shorten "$MEM_SKILL")" | fold -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  printf '%s\n' "target: $(shorten "$MEM_SKILL")" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
   msent "TARGET $(shorten "$MEM_SKILL")"
+  if [ "$STUBKIND" = "synthetic-stub" ]; then
+    printf '%s\n' "target-kind: SYNTHETIC STUB — interface-conformance double, not the owner's installation" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+    msent "STUBKIND synthetic-stub"
+  fi
   printf '%s\n' "mode: $AUDIT_MODE" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
   msent "MODE $AUDIT_MODE_SHORT"
   printf '  %s\n' "$BOLD_RULE"
@@ -554,13 +570,13 @@ else skip "no egress denylist" "$DENYLIST missing or empty"; fi
 # check above catches the user's real literals; this catches any other
 # undeclared secret-shaped value before it can ship in a public fixture.
 SYNTH="$SKILL_DIR/bin/fixtures/SYNTHETIC.txt"
-SHAPES='[0-9]{3}-[0-9]{2}-[0-9]{4}|[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}|sk_(live|test)_[A-Za-z0-9]+|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[bpas]-[A-Za-z0-9-]+|AIza[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|BEGIN [A-Z ]*PRIVATE KEY'
+SHAPES='[0-9]{3}-[0-9]{2}-[0-9]{4}|[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}|sk_(live|test)_[A-Za-z0-9]+|sk-[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9]+|AKIA[0-9A-Z]{16}|xox[bpas]-[A-Za-z0-9-]+|AIza[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|BEGIN [A-Z ]*PRIVATE KEY'
 if [ -f "$SYNTH" ]; then
   undeclared=""
   while IFS= read -r tok; do
     [ -n "$tok" ] || continue
     grep -qxF "$tok" "$SYNTH" || undeclared="${undeclared}${tok} "
-  done < <(grep -hoE "$SHAPES" "$SKILL_DIR"/bin/fixtures/*.txt "$SKILL_DIR/bin/adversarial-corpus.txt" 2>/dev/null | sort -u)
+  done < <(grep -hoE "$SHAPES" "$SKILL_DIR"/bin/fixtures/*.txt "$SKILL_DIR/bin/adversarial-corpus.txt" "$SKILL_DIR"/test/stub-memory-skill/bin/fixtures/*.txt 2>/dev/null | sort -u)
   if [ -n "$undeclared" ]; then bad "undeclared secret-shaped fixture values" "$undeclared" "declare each value as synthetic in bin/fixtures/SYNTHETIC.txt (after review), or remove it, then re-run this audit."
   else ok "all secret-shaped fixture values are declared synthetic"; fi
 else bad "bin/fixtures/SYNTHETIC.txt missing" "" "restore it from the repo, then re-run this audit."; fi

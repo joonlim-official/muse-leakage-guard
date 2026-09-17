@@ -1,0 +1,6 @@
+# Workflow and validation harness changes need a careful eye: they run in CI
+# with the repo's trust. Keep the stub honest and the workflow minimal.
+.github/ @joonlim-official
+bin/ @joonlim-official
+test/stub-memory-skill/ @joonlim-official
+references/gate-interface.md @joonlim-official

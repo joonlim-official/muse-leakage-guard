@@ -98,26 +98,32 @@ figures, addresses, and numbers through the real gates, reporting
 verdicts per check. That harness must live outside this repo and never be
 committed — this repo stays synthetic-only, always.
 
-## Quickstart
+## Quickstart (stub-first — no private installation needed)
 
 ```bash
 git clone https://github.com/joonlim-official/muse-leakage-guard.git
 cd muse-leakage-guard
-cp local.env.example local.env   # gitignored; point PERSONAL_MEMORY_SKILL
-                                 # at your memory-skill installation
-bin/leakage-audit && bin/adversarial-run
+# Validate the harness against the bundled synthetic stub:
+export PERSONAL_MEMORY_SKILL="$PWD/test/stub-memory-skill"
+export MOCHI_AGENTS_FILE="$PWD/test/stub-memory-skill/AGENTS.md"
+export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
+bin/leakage-audit && bin/adversarial-run   # expect CLEAN and 36/36
 ```
+
+To validate **your own installation** instead: `cp local.env.example
+local.env` (gitignored) and point `PERSONAL_MEMORY_SKILL` at your
+memory-skill installation there, or export it directly. The audit labels
+stub targets as `target-kind: SYNTHETIC STUB` and refuses live-fire
+against them.
 
 What you need:
 
-- A `personal-memory-system`-style installation to validate: the gates
-  (`bin/memory-egress-check`), shims, and brief gate. Out of the box it
-  looks next to itself at `~/workspace/skills/personal-memory-system`;
-  set `PERSONAL_MEMORY_SKILL` (in `local.env` or the environment) to
-  point anywhere else.
 - `bash` + `python3`. No network. By default nothing is ever really sent —
   the red-team tests run against fake binaries and every blocked send
   verifies the real binary was never invoked.
+- For your own installation: a `personal-memory-system`-style skill with
+  the gates (`bin/memory-egress-check`), shims, and brief gate honoring
+  the interface contract in `references/gate-interface.md`.
 
 What you get:
 
@@ -133,6 +139,21 @@ What you get:
 
 Run the audit after any change to the protection layer — and on a
 schedule. A protection nobody re-tests is a protection nobody has.
+
+## Continuous integration
+
+[![validate](https://github.com/joonlim-official/muse-leakage-guard/actions/workflows/validate.yml/badge.svg)](https://github.com/joonlim-official/muse-leakage-guard/actions/workflows/validate.yml)
+
+`.github/workflows/validate.yml` runs the audit + adversarial suite
+against the synthetic stub on every PR and push to `main`. **What green
+CI proves:** the harness is self-consistent — plumbing, parsing, labels,
+and report honesty work against the bundled test double. **What it does
+not prove:** that any real installation is protected; only a run against
+the real installation speaks to protection. The workflow is
+deliberately minimal: `pull_request` (never `pull_request_target`),
+`contents: read`, SHA-pinned actions, shallow checkout, no secrets, and
+it refuses to run if any live-fire variable is set or `local.env` is
+present. See `CONTRIBUTING.md` for the contributor workflow.
 
 ## Configuration
 

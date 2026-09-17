@@ -3,6 +3,46 @@
 Brief per-iteration notes. Each iteration: all 10 personas review in
 parallel → synthesis → one focused diff → full validation → one commit.
 
+## Iteration 4 — CI readiness + synthetic stub skill
+
+The harness now validates itself in public CI with no private
+installation — and a green run cannot be mistaken for protection:
+
+- **Synthetic stub skill.** `test/stub-memory-skill/` is a checked-in
+  test double honoring the new interface contract
+  (`references/gate-interface.md`, `interface_version=1`): stub
+  `memory-egress-check`, `egress-gate`, `brief-gate`, Gmail/Drive and
+  Messenger shims, synthetic fixtures, and a stub agent manual. Its
+  detector extracts public token shapes and classifies by lookup in a
+  declared set of synthetic block-tier tokens (`bin/blockset.txt`),
+  derived from corpus want=1 cases plus declared fixtures by
+  `build/build-blockset.sh` (whose `--check` CI runs). Known synthetic
+  block-tier tokens → block (rc=1); other secret/figure/phone shapes →
+  fail closed to review (rc=2); clean → pass (rc=0). It is a test double,
+  not a protection layer — never deploy it.
+- **Stub labeling + live-fire refusal.** The audit detects
+  `.synthetic-stub`, prints `target-kind: SYNTHETIC STUB`, emits a
+  `STUBKIND` machine sentinel, and refuses live-fire against stub
+  targets (exit 2). Fixture-purity inspection covers stub fixtures; the
+  synthetic `gsk_` shape replaced the AWS-shaped `aws_key` fixture.
+- **Honest stub reporting.** The HTML report banners stub targets
+  (banner, page title, hero line, footer), renders a "Stub consistency"
+  card instead of "Detection performance", qualifies results as harness
+  self-consistency, adds an accessible "match" table header and
+  visually hidden status text, and redacts home paths/emails from raw
+  transcripts.
+- **CI.** `.github/workflows/validate.yml` runs audit + adversarial
+  against the stub on PRs and pushes to `main`: `pull_request` (never
+  `pull_request_target`), `contents: read`, SHA-pinned actions,
+  `persist-credentials: false`, `fetch-depth: 1`, no secrets, live-fire
+  variables and `local.env` refused, skip set pinned (exactly
+  memory-audit + gate-log), 14-day report artifact, step summary stating
+  what green does and does not prove. `CONTRIBUTING.md` and
+  `.github/CODEOWNERS` added; README quickstart is stub-first.
+- **Attack-surface E2.** "Stub-target validation mistaken for real
+  protection" is cataloged (PROTECTED by labeling + refusal) and mapped
+  in the test matrix.
+
 ## Iteration 3 — Report honesty and parser hardening
 
 The report can no longer say things the run did not prove:

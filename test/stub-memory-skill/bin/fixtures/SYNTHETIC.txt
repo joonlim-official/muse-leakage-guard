@@ -1,0 +1,1 @@
+Stub fixture manifest: every block-tier token above is a declared synthetic value (see bin/fixtures/SYNTHETIC.txt in the guard repo and build/build-blockset.sh).

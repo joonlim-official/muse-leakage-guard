@@ -1,0 +1,157 @@
+# Validates the leakage-guard harness against the synthetic stub.
+#
+# What green CI proves: the harness is self-consistent — the audit's
+# plumbing, parsing, labels, and the report generator work against the
+# bundled test double (test/stub-memory-skill). What it does NOT prove:
+# that any real installation is protected. Only a run against the real
+# installation speaks to protection. See references/gate-interface.md.
+#
+# Safety shape (deliberate):
+# - pull_request (not pull_request_target): fork PRs get no write token.
+# - permissions: contents: read; persist-credentials: false.
+# - fetch-depth: 1: public history contains older private values; keep the
+#   checkout shallow so a compromised step cannot exfiltrate full history.
+# - Live-fire is refused: the audit exits 2 against stub targets, and this
+#   workflow additionally fails fast if any live-fire variable is present.
+# - No repository secrets are used or needed.
+
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Stub-first: CI never needs the owner's real installation or local.env.
+      PERSONAL_MEMORY_SKILL: ${{ github.workspace }}/test/stub-memory-skill
+      MOCHI_AGENTS_FILE: ${{ github.workspace }}/test/stub-memory-skill/AGENTS.md
+      MOCHI_EGRESS_LOG: ${{ runner.temp }}/egress-gate.log
+      CI: "true"
+    steps:
+      - name: Check out the repo (shallow, no credentials)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Refuse live-fire variables
+        run: |
+          for v in MOCHI_LIVE_FIRE MOCHI_LIVE_FIRE_NONINTERACTIVE MOCHI_EGRESS_APPROVED; do
+            if [ -n "${!v:-}" ]; then
+              echo "validate: refusing to run with $v set in CI" >&2
+              exit 1
+            fi
+          done
+          echo "validate: no live-fire variables present"
+
+      - name: Refuse a committed local.env
+        run: |
+          if [ -e local.env ]; then
+            echo "validate: local.env must never be committed" >&2
+            exit 1
+          fi
+          echo "validate: no local.env present"
+
+      - name: Provision inert delegate CLIs behind the stub shims
+        run: |
+          # The audit requires a second, distinct executable behind each shim
+          # on PATH (a shim must never be "tested" against itself). These are
+          # inert: they exit 0 and touch nothing. They live OUTSIDE the shim
+          # directory, are unmistakably synthetic, and never send anything.
+          sudo tee /usr/local/bin/hatch_gws_cli > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          # Inert delegate for CI: stands in for the real CLI behind the stub shim. Never sends.
+          exit 0
+          EOF
+          sudo tee /usr/local/bin/hatch_messenger_cli > /dev/null <<'EOF'
+          #!/usr/bin/env bash
+          # Inert delegate for CI: stands in for the real CLI behind the stub shim. Never sends.
+          exit 0
+          EOF
+          sudo chmod +x /usr/local/bin/hatch_gws_cli /usr/local/bin/hatch_messenger_cli
+          /usr/local/bin/hatch_gws_cli && /usr/local/bin/hatch_messenger_cli
+          echo "validate: inert delegates provisioned"
+
+      - name: Syntax-check every shell script
+        run: |
+          fail=0
+          for f in bin/leakage-audit bin/leakage-report bin/adversarial-run \
+                   test/stub-memory-skill/bin/egress-gate \
+                   test/stub-memory-skill/bin/brief-gate \
+                   test/stub-memory-skill/bin/memory-egress-check \
+                   test/stub-memory-skill/bin/patterns.sh \
+                   test/stub-memory-skill/bin/shims/hatch_gws_cli \
+                   test/stub-memory-skill/bin/shims/hatch_messenger_cli \
+                   test/stub-memory-skill/build/build-blockset.sh; do
+            if [ ! -f "$f" ]; then echo "missing script: $f" >&2; fail=1;
+            elif ! bash -n "$f"; then echo "syntax error: $f" >&2; fail=1; fi
+          done
+          exit $fail
+
+      - name: Check the stub block set is current
+        run: test/stub-memory-skill/build/build-blockset.sh --check
+
+      - name: Run the leakage audit against the synthetic stub
+        run: |
+          set -o pipefail
+          export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
+          MOCHI_AUDIT_MACHINE=1 MOCHI_REPORT_WIDTH=48 bin/leakage-audit | tee "${{ runner.temp }}/audit.log"
+        shell: bash
+
+      - name: Assert the expected skip set (no silent new skips)
+        run: |
+          # Stub-target runs are expected to skip exactly:
+          #   1. memory-audit (opt-in; the stub ships no memory-audit binary)
+          #   2. gate-log review (fresh CI log; no sends attempted yet)
+          # A new skip reason, or a different count, fails the run.
+          mapfile -t skip_lines < <(grep -a '^@@@ CHECK SKIP' "${{ runner.temp }}/audit.log" || true)
+          echo "skip count: ${#skip_lines[@]}"
+          printf '%s\n' "${skip_lines[@]}"
+          [ "${#skip_lines[@]}" -eq 2 ] || { echo "validate: expected exactly 2 skips" >&2; exit 1; }
+          printf '%s\n' "${skip_lines[@]}" | grep -q 'memory-audit run' || { echo "validate: missing memory-audit skip" >&2; exit 1; }
+          printf '%s\n' "${skip_lines[@]}" | grep -q 'gate log not found' || { echo "validate: missing gate-log skip" >&2; exit 1; }
+          echo "validate: skip set matches the pinned expectation"
+
+      - name: Run the adversarial suite against the synthetic stub
+        run: bin/adversarial-run | tee "${{ runner.temp }}/adversarial.log"
+
+      - name: Generate the HTML validation report
+        run: |
+          export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
+          bin/leakage-report --out "${{ runner.temp }}/leakage-validation.html"
+          grep -q 'SYNTHETIC STUB TARGET' "${{ runner.temp }}/leakage-validation.html" \
+            || { echo "validate: report is missing the stub banner" >&2; exit 1; }
+          echo "validate: stub banner present in report"
+
+      - name: Upload the validation report
+        if: always()
+        uses: actions/upload-artifact@330a01c490805b77b4e53d9d6f71f148c51e1e1a7 # v4.6.2
+        with:
+          name: leakage-validation-report
+          path: ${{ runner.temp }}/leakage-validation.html
+          retention-days: 14
+
+      - name: Summarize the validation
+        if: always()
+        run: |
+          {
+            echo "## Leakage validation (synthetic stub)"
+            echo ""
+            echo "_Green here proves harness self-consistency against the bundled test double — not protection of any real installation._"
+            echo ""
+            grep -aE 'Total: [0-9]+ passed' "${{ runner.temp }}/audit.log" | sed 's/^/- Audit: /' || true
+            grep -aE 'adversarial-run: [0-9]+/[0-9]+ cases matched' "${{ runner.temp }}/adversarial.log" | sed 's/^/- Adversarial: /' || true
+            grep -aE 'block-tier recall' "${{ runner.temp }}/adversarial.log" | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"

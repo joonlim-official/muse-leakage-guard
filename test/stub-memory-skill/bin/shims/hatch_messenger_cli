@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# hatch_messenger_cli (SYNTHETIC STUB shim) — mirrors the interception
+# contract of the real messenger shim for harness self-consistency checks.
+# Interface version 1 (see ../../../references/gate-interface.md):
+#   send|edit [--text TEXT | --text=TEXT] [--text-stdin via stdin]
+#       [--cid CID] [--to USER]
+# The message (flag and/or stdin) passes bin/egress-gate; on allow, the
+# delegate is invoked with the message on stdin (byte-identical replay).
+# Everything else passes straight through to the delegate.
+# Delegates to $MOCHI_REAL_HATCH_MESSENGER_CLI, else the next
+# hatch_messenger_cli on PATH after this shim's own directory.
+# This is a test double for harness self-consistency checks — it is not a
+# protection layer.
+set -u
+SHIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE_DIR="$(cd "$SHIM_DIR/.." && pwd)"   # .../bin, where egress-gate lives
+
+REAL="${MOCHI_REAL_HATCH_MESSENGER_CLI:-}"
+if [ -z "$REAL" ]; then
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ "$d" = "$SHIM_DIR" ] && continue
+    if [ -x "$d/hatch_messenger_cli" ]; then REAL="$d/hatch_messenger_cli"; break; fi
+  done <<< "${PATH//:/$'\n'}"
+fi
+[ -n "$REAL" ] || { echo "stub-shim: real hatch_messenger_cli not found on PATH" >&2; exit 127; }
+
+case "${1:-}" in
+  send|edit)
+    text=""; prev=""; ctx="messenger $1 (stub)"
+    for a in "$@"; do
+      case "$a" in
+        --text=*) text="${a#--text=}"; prev="";;
+        --cid=*|--to=*) prev="";;
+        --cid|--to) prev="";;
+        --text) prev=t;;
+        --text-stdin) prev="";;
+        *) [ "$prev" = "t" ] && text="$a"; prev="";;
+      esac
+    done
+    tmp="$(mktemp)"
+    if [ ! -t 0 ]; then cat > "$tmp"; fi
+    [ -n "$text" ] && printf '\n%s\n' "$text" >> "$tmp"
+    rc=0
+    "$GATE_DIR/egress-gate" --content-file "$tmp" --context "$ctx" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      "$REAL" "$@" < "$tmp"; rc=$?
+    fi
+    rm -f "$tmp"
+    exit "$rc"
+    ;;
+esac
+exec "$REAL" "$@"

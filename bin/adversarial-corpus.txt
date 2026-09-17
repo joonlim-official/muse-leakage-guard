@@ -13,7 +13,7 @@
 stripe_live|1|Pay with sk_live_4eC39HqLyjWDarjtT1z for the order
 stripe_test|1|Test key sk_test_BQokikJOvBiI2HlWgH4o is in the config
 google_api|1|Maps key: AIzaSyA-abcdefghijklmnopqrstuvw12
-aws_key|1|Deploy with AKIAIOSFODNN7EXAMPLE in env
+groq_key|1|Groq key gsk_f4k3gr0qk3yf0rt3st1ng0nly000000 in config
 github_pat|1|Token ghp_abcdefghij1234567890abcdefgh here
 slack_bot|1|Notify via xoxb-12345-67890-AbCdEfGhIjKlMnOpQrStUvWx
 openai_key|1|Model key sk-abcdefghijklmnopqrstuvwxyz1234567890ABCD

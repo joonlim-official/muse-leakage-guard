@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# brief-gate (SYNTHETIC STUB) — brief-facing gate for the stub skill.
+# Same CLI contract as the real gate (references/gate-interface.md,
+# interface version 1): bin/brief-gate --brief-file F --task T [--approved].
+# This is a test double for harness self-consistency checks — it is not a
+# protection layer.
+set -u
+STUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BRIEF=""; APPROVED=0; TASK=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --brief-file) BRIEF="$2"; shift 2;;
+    --task) TASK="$2"; shift 2;;
+    --approved) APPROVED=1; shift;;
+    *) shift;;
+  esac
+done
+[ -z "$BRIEF" ] && { echo "brief-gate(stub): --brief-file is required" >&2; exit 2; }
+[ "${MOCHI_EGRESS_APPROVED:-}" = "1" ] && APPROVED=1
+"$STUB_DIR/bin/memory-egress-check" "$BRIEF" >/dev/null 2>&1; RC=$?
+[ "$RC" -eq 1 ] && { echo "brief-gate(stub): BLOCK — block-tier content in brief" >&2; exit 1; }
+if [ "$RC" -eq 2 ] && [ "$APPROVED" -ne 1 ]; then
+  echo "brief-gate(stub): REVIEW — figures/contact info need approval" >&2; exit 2
+fi
+exit 0
