@@ -44,6 +44,11 @@ Exit 0 = all checks pass. Exit 1 = at least one check failed; the report
 names every failure. A report is printed to stdout; save it with
 `bin/leakage-audit | tee reports/<date>.md`.
 
+The report is responsive: it fits the terminal width (or
+`MOCHI_REPORT_WIDTH`, clamped to 40–76), wraps every line so nothing
+scrolls sideways on a phone, shortens `$HOME` to `~`, and switches the
+summary table to a stacked layout on narrow screens.
+
 ## Layout
 
 - `bin/leakage-audit` — the validation runner (all checks, all fixtures).

@@ -34,19 +34,45 @@ PASS=0; FAIL=0; SKIPPED=0
 SUITE_LETTER=""; SUITE_NAME=""; sP=0; sF=0; sS=0
 ROWS=""; FINDINGS=""
 
-ok()   { PASS=$((PASS+1)); printf '  ✓ %s\n' "$1"; }
-bad()  { FAIL=$((FAIL+1)); printf '  ✗ %s\n' "$1"
-         FINDINGS="${FINDINGS}  ✗ $1"$'\n'
+# Report width: override with MOCHI_REPORT_WIDTH, else terminal width,
+# else a mobile-friendly 48. Clamped to [40, 76].
+WIDTH="${MOCHI_REPORT_WIDTH:-}"
+if [ -z "$WIDTH" ]; then WIDTH="$(tput cols 2>/dev/null || echo 48)"; fi
+case "$WIDTH" in ''|*[!0-9]*) WIDTH=48;; esac
+[ "$WIDTH" -lt 40 ] && WIDTH=40
+[ "$WIDTH" -gt 76 ] && WIDTH=76
+RULE="$(printf '─%.0s' $(seq 1 $((WIDTH-2))))"
+BOLD_RULE="$(printf '═%.0s' $(seq 1 $((WIDTH-2))))"
+
+shorten() { printf '%s' "${1//$HOME/\~}"; }   # $HOME -> ~ for display
+
+# Wrapped check line: "  ✓ text", continuations indented.
+wcheck() {
+  printf '%s\n' "$*" | fold -s -w "$((WIDTH-4))" | sed 's/ *$//' | sed '1s/^/  /; 2,$s/^/    /'
+}
+# Wrapped detail line: hard break so evidence never scrolls sideways.
+# Reads stdin or args; each logical line wraps independently.
+wdetail() {
+  { if [ $# -gt 0 ]; then printf '%s\n' "$*"; else cat; fi; } \
+    | while IFS= read -r line; do
+        printf '%s\n' "$line" | fold -w "$((WIDTH-6))" | sed 's/ *$//' | sed '1s/^/    /; 2,$s/^/      /'
+      done
+}
+
+ok()   { PASS=$((PASS+1)); wcheck "✓ $(shorten "$1")"; }
+bad()  { FAIL=$((FAIL+1)); wcheck "✗ $(shorten "$1")"
+         FINDINGS="${FINDINGS}$(wcheck "✗ $(shorten "$1")")"$'\n'
          if [ -n "${2:-}" ]; then
-           printf '%s\n' "$2" | sed 's/^/      /'
-           FINDINGS="${FINDINGS}$(printf '%s\n' "$2" | sed 's/^/      /')"$'\n'
+           printf '%s\n' "$2" | wdetail
+           FINDINGS="${FINDINGS}$(printf '%s\n' "$2" | wdetail)"$'\n'
          fi; }
-skip() { SKIPPED=$((SKIPPED+1)); printf '  – %s  [%s]\n' "$1" "$2"; }
+skip() { SKIPPED=$((SKIPPED+1)); wcheck "– $(shorten "$1") [$(shorten "$2")]"; }
 
 begin_suite() { # <letter> <name>
   SUITE_LETTER="$1"; SUITE_NAME="$2"; sP=$PASS; sF=$FAIL; sS=$SKIPPED
-  printf '\n  %s. %s\n' "$1" "$2"
-  printf '  %s\n' "──────────────────────────────────────────────────"
+  printf '\n'
+  printf '  %s. %s\n' "$1" "$2" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/     /'
+  printf '  %s\n' "$RULE"
 }
 end_suite() {
   local p=$((PASS-sP)) f=$((FAIL-sF)) s=$((SKIPPED-sS)) label
@@ -55,36 +81,53 @@ end_suite() {
     C) label="Coverage checks";;   D) label="Log review";;
     *) label="Residuals";;
   esac
-  printf '  %s\n' "──────────────────────────────────────────────────"
-  printf '  %s: %d passed · %d failed · %d skipped\n' "$SUITE_NAME" "$p" "$f" "$s"
-  ROWS="${ROWS}$(printf '  %-34s %5d %5d %5d\n' "$SUITE_LETTER. $label" "$p" "$f" "$s")"$'\n'
+  printf '  %s\n' "$RULE"
+  printf '    %d passed · %d failed · %d skipped\n' "$p" "$f" "$s"
+  ROWS="${ROWS}${SUITE_LETTER}|${label}|${p}|${f}|${s}"$'\n'
 }
 
 print_header() {
   printf '\n  muse-leakage-guard · leakage-audit\n'
-  printf '  %s · target: %s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$MEM_SKILL"
-  printf '  %s\n' "══════════════════════════════════════════════════"
+  printf '  %s\n' "$(date '+%Y-%m-%d %H:%M %Z')"
+  printf '%s\n' "target: $(shorten "$MEM_SKILL")" | fold -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  printf '  %s\n' "$BOLD_RULE"
 }
 
 print_summary() {
   printf '\n  Summary\n'
-  printf '  %s\n' "──────────────────────────────────────────────────"
-  printf '  %-34s %5s %5s %5s\n' "Suite" "Pass" "Fail" "Skip"
-  printf '  %s\n' "──────────────────────────────────────────────────"
-  printf '%s' "$ROWS"
-  printf '  %s\n' "──────────────────────────────────────────────────"
-  printf '  %-34s %5d %5d %5d\n' "Total" "$PASS" "$FAIL" "$SKIPPED"
+  printf '  %s\n' "$RULE"
+  if [ "$WIDTH" -ge 56 ]; then
+    printf '  %-32s %5s %5s %5s\n' "Suite" "Pass" "Fail" "Skip"
+    printf '  %s\n' "$RULE"
+    while IFS='|' read -r l lab p f s; do
+      [ -n "$l" ] || continue
+      printf '  %-32s %5d %5d %5d\n' "$l. $lab" "$p" "$f" "$s"
+    done <<< "$ROWS"
+    printf '  %s\n' "$RULE"
+    printf '  %-32s %5d %5d %5d\n' "Total" "$PASS" "$FAIL" "$SKIPPED"
+  else
+    while IFS='|' read -r l lab p f s; do
+      [ -n "$l" ] || continue
+      printf '  %s. %s\n' "$l" "$lab"
+      printf '    %d passed · %d failed · %d skipped\n' "$p" "$f" "$s"
+    done <<< "$ROWS"
+    printf '  %s\n' "$RULE"
+    printf '%s\n' "Total: $PASS passed · $FAIL failed · $SKIPPED skipped" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  fi
   if [ "$FAIL" -eq 0 ]; then
     if [ "$SKIPPED" -gt 0 ]; then
-      printf '\n  VERDICT: CLEAN — all %d checks passed (%d skipped).\n' "$PASS" "$SKIPPED"
+      v="VERDICT: CLEAN — all $PASS checks passed ($SKIPPED skipped)."
     else
-      printf '\n  VERDICT: CLEAN — all %d checks passed.\n' "$PASS"
+      v="VERDICT: CLEAN — all $PASS checks passed."
     fi
   else
-    printf '\n  VERDICT: ATTENTION — %d finding(s) need review.\n' "$FAIL"
+    v="VERDICT: ATTENTION — $FAIL finding(s) need review."
+  fi
+  printf '%s\n' "$v" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  if [ "$FAIL" -gt 0 ]; then
     printf '\n  Findings\n'
-    printf '  %s\n' "──────────────────────────────────────────────────"
-    printf '%b' "$FINDINGS"
+    printf '  %s\n' "$RULE"
+    printf '%s\n' "$FINDINGS"
   fi
   printf '\n'
 }
@@ -233,30 +276,32 @@ end_suite
 begin_suite "D" "Gate audit-log review"
 if [ -f "$REAL_LOG" ]; then
   total="$(wc -l < "$REAL_LOG")"
-  echo "      $total gate decisions logged"
+  printf '%s\n' "$total gate decisions logged" | wdetail
   for v in BLOCKED needs-approval approved-override; do
     n="$(grep -c "| $v$" "$REAL_LOG" 2>/dev/null || true)"
-    [ "$n" -gt 0 ] && echo "      $v: $n"
+    [ "$n" -gt 0 ] && printf '%s\n' "$v: $n" | wdetail
   done
   if grep -q "| approved-override$" "$REAL_LOG"; then
-    echo "      --- overrides (need human review) ---"
-    grep "| approved-override$" "$REAL_LOG" | tail -5 | sed 's/^/      /'
+    printf '%s\n' "--- overrides (need human review) ---" | wdetail
+    grep "| approved-override$" "$REAL_LOG" | tail -5 | wdetail
   fi
   if grep -q "| BLOCKED$" "$REAL_LOG"; then
-    echo "      --- blocked attempts ---"
-    grep "| BLOCKED$" "$REAL_LOG" | tail -5 | sed 's/^/      /'
+    printf '%s\n' "--- blocked attempts ---" | wdetail
+    grep "| BLOCKED$" "$REAL_LOG" | tail -5 | wdetail
   fi
   ok "gate log reviewed"
-else skip "gate log not found" "$REAL_LOG (no sends attempted yet)"; fi
+else skip "gate log not found" "$(shorten "$REAL_LOG") (no sends attempted yet)"; fi
 
 end_suite
 
 # ------------------------------------------------------------- E. residuals
 begin_suite "E" "Known residuals (reported, never silent)"
-echo "      - browser-task sends: separate VM, shims can't reach; brief-level instruction only"
-echo "      - absolute-path bypass of shims: forbidden by policy, not technically preventable"
-echo "      - voice calls: phone tool's own confirmation flow (out of text-gate scope)"
-echo "      - brief-gate runs on mandate (no syscall interception for brief text)"
+{
+printf '%s\n' "- browser-task sends: separate VM, shims can't reach; brief-level instruction only"
+printf '%s\n' "- absolute-path bypass of shims: forbidden by policy, not technically preventable"
+printf '%s\n' "- voice calls: phone tool's own confirmation flow (out of text-gate scope)"
+printf '%s\n' "- brief-gate runs on mandate (no syscall interception for brief text)"
+} | wdetail
 
 end_suite
 
