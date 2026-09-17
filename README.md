@@ -127,6 +127,7 @@ What you get:
   evidence and a suggested remediation.
 - `bin/adversarial-run` — detection performance: every payload in
   `bin/adversarial-corpus.txt` against the gates, want-vs-got per case.
+  Fails closed on an empty or malformed corpus (a 0/0 pass is vacuous).
 - `bin/leakage-report [--out PATH]` — a mobile-friendly HTML report of
   the audit: per-check inputs, outputs, findings, and suggestions.
 

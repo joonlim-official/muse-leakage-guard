@@ -14,6 +14,8 @@ belonging to nobody.
 | `bash -n` on all scripts | no syntax rot; the gate that can't parse can't protect |
 | shim dir resolves first for `hatch_gws_cli` / `hatch_messenger_cli` | interception actually happens (PATH order is the mechanism) |
 | real binary discoverable behind the shim | the shim can delegate after allowing; a shim that can't find its target fails closed or breaks sends |
+| every fixture present and non-empty | no vacuous tests — an empty "clean" fixture passes trivially, a missing block-tier fixture errors into a misleading verdict |
+| adversarial corpus has ≥1 case | an empty corpus would report 0/0 as a pass; the runner now fails closed on zero cases |
 
 ## B. Gate effectiveness (red team, fake real binaries — nothing is ever sent)
 

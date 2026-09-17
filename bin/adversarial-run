@@ -27,6 +27,9 @@ CORPUS="$SKILL_DIR/bin/adversarial-corpus.txt"
 pass=0; fail=0; failed_cases=""
 while IFS='|' read -r name want content; do
   case "$name" in \#*|'') continue;; esac
+  case "$want" in 0|1|2) ;; *)
+    printf '  MALFORMED %s: want=%s (must be 0, 1, or 2)\n' "$name" "$want" >&2
+    fail=$((fail+1)); continue;; esac
   got="$(printf '%s' "$content" | "$GATE" >/dev/null 2>&1; echo $?)"
   if [ "$got" = "$want" ]; then
     pass=$((pass+1))
@@ -38,6 +41,10 @@ while IFS='|' read -r name want content; do
 done < "$CORPUS"
 
 total=$((pass+fail))
+if [ "$total" -eq 0 ]; then
+  echo "adversarial-run: FAIL — corpus yielded 0 cases (empty or corrupted). A 0/0 pass is vacuous; restore bin/adversarial-corpus.txt." >&2
+  exit 1
+fi
 echo "adversarial-run: $pass/$total cases matched expected verdicts."
 if [ "$fail" -gt 0 ]; then
   printf '%b' "$failed_cases" >&2

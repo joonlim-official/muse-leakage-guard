@@ -166,6 +166,18 @@ for cli in hatch_gws_cli hatch_messenger_cli; do
   else bad "real $cli not found on PATH — shim has nothing to delegate to" "" "install the real CLI or extend PATH so the shim has a delegate; a shim with no delegate breaks every send."; fi
 done
 
+# Fixture integrity: a missing or empty fixture makes its check vacuous
+# (an empty "clean" fixture passes trivially; a missing block-tier fixture
+# can error into a misleading verdict). Fail closed on fixture rot.
+for fix in clean.txt secret.txt secret2.txt ssn.txt card.txt figure.txt phone.txt; do
+  if [ ! -f "$FIX/$fix" ]; then bad "fixture $fix missing" "" "restore bin/fixtures/$fix from the repo, then re-run this audit."
+  elif [ ! -s "$FIX/$fix" ]; then bad "fixture $fix is empty (vacuous test)" "" "restore the fixture content from the repo, then re-run this audit."
+  else ok "fixture $fix present and non-empty"; fi
+done
+corpus_cases="$(grep -vcE '^[[:space:]]*(#|$)' "$SKILL_DIR/bin/adversarial-corpus.txt" 2>/dev/null || echo 0)"
+if [ "$corpus_cases" -ge 1 ]; then ok "adversarial corpus has $corpus_cases cases"
+else bad "adversarial corpus is empty — 0/0 would be a vacuous pass" "" "restore bin/adversarial-corpus.txt from the repo, then re-run this audit."; fi
+
 end_suite
 
 # ------------------------------------------------- B. red team (fake sends)
