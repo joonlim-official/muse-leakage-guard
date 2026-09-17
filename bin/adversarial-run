@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# adversarial-run: detection-performance check for the egress gate.
+#
+# Runs every payload in bin/adversarial-corpus.txt through the memory
+# skill's memory-egress-check and compares the real verdict against the
+# expected one. This is the precision/recall half of validation:
+# leakage-audit proves the plumbing; this proves the detectors.
+#
+# All corpus values are synthetic (shaped to trip detectors, belonging
+# to nobody). Never add real private data here.
+#
+# Env (same as leakage-audit):
+#   PERSONAL_MEMORY_SKILL   memory skill under test
+#                           (default ~/workspace/skills/personal-memory-system)
+# Exit: 0 = every case matched, 1 = at least one mismatch (listed).
+set -u
+
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -f "$SKILL_DIR/local.env" ] && . "$SKILL_DIR/local.env"
+MEM_SKILL="${PERSONAL_MEMORY_SKILL:-$HOME/workspace/skills/personal-memory-system}"
+GATE="$MEM_SKILL/bin/memory-egress-check"
+CORPUS="$SKILL_DIR/bin/adversarial-corpus.txt"
+
+[ -x "$GATE" ] || { echo "adversarial-run: gate not found: $GATE" >&2; exit 1; }
+[ -f "$CORPUS" ] || { echo "adversarial-run: corpus not found: $CORPUS" >&2; exit 1; }
+
+pass=0; fail=0; failed_cases=""
+while IFS='|' read -r name want content; do
+  case "$name" in \#*|'') continue;; esac
+  got="$(printf '%s' "$content" | "$GATE" >/dev/null 2>&1; echo $?)"
+  if [ "$got" = "$want" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    failed_cases="${failed_cases}  MISMATCH $name: want rc=$want, got rc=$got\n"
+    printf '  MISMATCH %-16s want rc=%s got rc=%s\n' "$name" "$want" "$got" >&2
+  fi
+done < "$CORPUS"
+
+total=$((pass+fail))
+echo "adversarial-run: $pass/$total cases matched expected verdicts."
+if [ "$fail" -gt 0 ]; then
+  printf '%b' "$failed_cases" >&2
+  echo "Suggestion: tighten the missing pattern in $GATE (or fix the corpus expectation), then re-run." >&2
+  exit 1
+fi

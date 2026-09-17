@@ -98,23 +98,63 @@ figures, addresses, and numbers through the real gates, reporting
 verdicts per check. That harness must live outside this repo and never be
 committed — this repo stays synthetic-only, always.
 
-## Setup
+## Quickstart
 
 ```bash
-cp local.env.example local.env   # gitignored; fill in your paths
-bin/leakage-audit
+git clone https://github.com/joonlim-official/muse-leakage-guard.git
+cd muse-leakage-guard
+cp local.env.example local.env   # gitignored; point PERSONAL_MEMORY_SKILL
+                                 # at your memory-skill installation
+bin/leakage-audit && bin/adversarial-run
 ```
 
-Configuration is entirely env-driven (see `local.env.example`) — no
-personal paths are baked into the skill.
+What you need:
 
-Exit 0 = all checks pass. Exit 1 = at least one failure, each named with
-its evidence and a suggested remediation.
+- A `personal-memory-system`-style installation to validate: the gates
+  (`bin/memory-egress-check`), shims, and brief gate. Out of the box it
+  looks next to itself at `~/workspace/skills/personal-memory-system`;
+  set `PERSONAL_MEMORY_SKILL` (in `local.env` or the environment) to
+  point anywhere else.
+- `bash` only. No dependencies, no network, nothing is ever really sent —
+  the red-team tests run against fake binaries and every blocked send
+  verifies the real binary was never invoked.
+
+What you get:
+
+- `bin/leakage-audit` — five suites: installation integrity, red-team
+  gate tests, attack-surface coverage, gate-log review, and the explicit
+  residual-risk report. Exit 0 = CLEAN, exit 1 = failures, each with its
+  evidence and a suggested remediation.
+- `bin/adversarial-run` — detection performance: every payload in
+  `bin/adversarial-corpus.txt` against the gates, want-vs-got per case.
+- `bin/leakage-report [--out PATH]` — a mobile-friendly HTML report of
+  the audit: per-check inputs, outputs, findings, and suggestions.
+
+Run the audit after any change to the protection layer — and on a
+schedule. A protection nobody re-tests is a protection nobody has.
+
+## Configuration
+
+Configuration is entirely env-driven (see `local.env.example`) — no
+personal paths are baked into the skill:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `PERSONAL_MEMORY_SKILL` | memory skill under test | `~/workspace/skills/personal-memory-system` |
+| `PERSONAL_MEMORY_ROOT` | memory root passed through to the gates | `~` |
+| `MOCHI_CRON_PROMPT_DIRS` | dirs whose cron prompts must wire the shim `PATH` | unset (check skipped) |
+| `MOCHI_MEMORY_AUDIT` | set to `1` to include the memory skill's own audit | `0` |
+
+All test fixtures and corpus payloads are synthetic and impersonal —
+shaped to trip the detectors, belonging to nobody. Never put real
+private data in `bin/fixtures/` or `bin/adversarial-corpus.txt`.
 
 ## Layout
 
 - `SKILL.md` — skill definition (for the agent).
 - `bin/leakage-audit` — the validation runner.
+- `bin/adversarial-run` — detection-performance runner over the corpus.
+- `bin/adversarial-corpus.txt` — synthetic payloads with expected verdicts.
 - `bin/fixtures/` — synthetic payloads only.
 - `bin/leakage-report` — HTML report generator.
 - `references/attack-surface.md` — enumerated leakage paths and controls.
