@@ -1,3 +1,7 @@
 local.env
 reports/*
 !reports/.gitkeep
+
+# iteration reports live in hidden_files/reports/
+hidden_files/reports/*
+!hidden_files/reports/.gitkeep

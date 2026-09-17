@@ -3,6 +3,10 @@
 # ALL VALUES ARE SYNTHETIC: shaped to trip the detectors, belonging to nobody.
 # phone_bare10 expects 0 by design: bare 10-digit numbers collide with
 # confirmation/order numbers, so they are a documented residual, not a miss.
+# clean_price expects 2 by design: dollar-shaped figures are review-tier
+# until the user rules the literal public (see E1 in
+# references/attack-surface.md); the exemption lives in the installation's
+# .egress-allowlist, not in the gate patterns.
 # Key-shaped values are deliberately shortened below hosting-platform
 # secret-scanner thresholds (still above the gate's own minimums) so this
 # corpus can live in a public repo. Every value is synthetic.

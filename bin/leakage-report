@@ -1,120 +1,362 @@
 #!/usr/bin/env bash
-# leakage-report — run the leakage audit and write a mobile-friendly HTML
-# outcome report with a one-sentence green/red callout per suite.
-# Usage: bin/leakage-report [--out PATH]
-# Exits with the audit's exit code (0 = CLEAN).
+# leakage-report — run the leakage audit AND the adversarial suite, then write
+# a mobile-friendly HTML outcome report with a one-sentence green/red callout
+# per suite. Every number, blurb, and callout is derived from the actual run —
+# nothing is hardcoded.
+#
+# The audit is invoked with MOCHI_AUDIT_MACHINE=1 so it emits machine-readable
+# @@-sentinels alongside its human-readable output; the report parses those
+# first and only falls back to hardened text scraping for older audit output.
+# If the audit output cannot be parsed (format drift, crashed run), no HTML is
+# written — a misleading report is worse than none.
+#
+# Usage: bin/leakage-report [--out PATH] [-h|--help]
+# Exit 0 = CLEAN audit and all adversarial cases matched.
+# Exit 1 = findings or adversarial mismatches (report still written).
+# Exit 2 = usage error, or the audit refused to run (no report written).
+# Exit 3 = report generation failed (no trustworthy report written).
 set -u
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    -h|--help) sed -n '2,/^#$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     --out) if [ -z "${2:-}" ] || [ "${2#-}" != "$2" ]; then
              echo "leakage-report: --out requires a PATH argument" >&2; exit 2; fi
            OUT="$2"; shift 2 ;;
-    *) echo "usage: bin/leakage-report [--out PATH]" >&2; exit 2 ;;
+    *) echo "usage: bin/leakage-report [--out PATH] [-h|--help]" >&2; exit 2 ;;
   esac
 done
 if [ -z "$OUT" ]; then
   mkdir -p "$SKILL_DIR/hidden_files/reports"
-  OUT="$SKILL_DIR/hidden_files/reports/leakage-validation-$(date +%Y%m%d-%H%M).html"
+  OUT="$SKILL_DIR/hidden_files/reports/leakage-validation-$(date +%Y%m%d-%H%M%S)-$$.html"
+else
+  mkdir -p "$(dirname "$OUT")"
 fi
-TMP="$(mktemp)"
-COLUMNS=76 "$SKILL_DIR/bin/leakage-audit" > "$TMP" 2>&1
+AUD_TMP="$(mktemp)"; ADV_TMP="$(mktemp)"
+trap 'rm -f "$AUD_TMP" "$ADV_TMP"' EXIT
+# Deterministic narrow layout the fallback parser understands; machine
+# sentinels on so the primary parser does not depend on text layout at all.
+MOCHI_REPORT_WIDTH=48 MOCHI_AUDIT_MACHINE=1 "$SKILL_DIR/bin/leakage-audit" > "$AUD_TMP" 2>&1
 RC=$?
-python3 - "$TMP" "$OUT" <<'PYEOF'
-import html, re, sys
-src, dst = sys.argv[1], sys.argv[2]
-text = open(src).read()
-lines = text.splitlines()
-suites, cur = [], None
-for ln in lines:
-    m = re.match(r"^    ([A-E])\. (.+)$", ln)
-    if m:
-        cur = {"letter": m.group(1), "name": m.group(2).strip(),
-               "checks": [], "notes": [], "sub": None}
-        suites.append(cur); continue
-    if cur is None: continue
-    m = re.match(r"^  (\S) (.*)$", ln)
-    if m and m.group(1).strip() in "✓✗–":
-        cur["checks"].append({"st": m.group(1).strip(), "text": m.group(2)}); continue
-    m = re.match(r"^    (\d+) passed · (\d+) failed · (\d+) skipped$", ln)
-    if m:
-        cur["sub"] = tuple(map(int, m.groups())); continue
-    m = re.match(r"^    - (.*)$", ln)
-    if m:
-        cur["notes"].append(m.group(1)); continue
-    if re.match(r"^    \S", ln) and cur["checks"] and cur["sub"] is None:
-        cur["checks"][-1]["text"] += " " + ln.strip()
-    elif re.match(r"^    \S", ln) and cur["notes"] and cur["sub"] is None:
-        cur["notes"][-1] += " " + ln.strip()
+if [ "$RC" -eq 2 ]; then
+  echo "leakage-report: audit refused to run (exit 2); no report generated." >&2
+  exit 2
+fi
+"$SKILL_DIR/bin/adversarial-run" > "$ADV_TMP" 2>&1
+ADV_RC=$?
+python3 - "$AUD_TMP" "$ADV_TMP" "$SKILL_DIR/bin/adversarial-corpus.txt" "$OUT" "$RC" "$ADV_RC" <<'PYEOF'
+import html, os, re, sys
+aud_src, adv_src, corpus_src, dst, rc, adv_rc = sys.argv[1:5] + [int(sys.argv[5]), int(sys.argv[6])]
 
-tm = re.search(r"Total: (\d+) passed · (\d+) failed · (\d+) skipped", text)
-total = tuple(map(int, tm.groups())) if tm else (0, 0, 0)
-vm = re.search(r"VERDICT: (CLEAN|ATTENTION)(.*)", text)
-verdict = (vm.group(1), vm.group(2).strip(" —.")) if vm else ("?", "")
-ts = re.search(r"^\s{2}(\d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+)", text, re.M)
-ts = ts.group(1) if ts else ""
-tgt = re.search(r"target: (\S+)", text)
-tgt = tgt.group(1) if tgt else ""
-mm = re.search(r"^  mode: (SIMULATED|LIVE-FIRE)", text, re.M)
-mode = mm.group(1) if mm else "SIMULATED"
+def die(msg):
+    print(f"leakage-report: {msg}", file=sys.stderr)
+    sys.exit(3)
+
+text = open(aud_src, errors="replace").read()
+lines = text.splitlines()
+
+def parse_machine(lines):
+    suites, cur, meta = [], None, {}
+    for ln in lines:
+        if not ln.startswith("@@@ "):
+            continue
+        body = ln[4:]
+        if body.startswith("SUITE "):
+            _, letter, name = body.split(" ", 2)
+            cur = {"letter": letter, "name": name, "checks": [], "notes": [], "ctx": [], "sub": None}
+            suites.append(cur)
+        elif body.startswith("ENDSUITE "):
+            _, letter, p, f, s = body.split()
+            hit = [x for x in suites if x["letter"] == letter and x["sub"] is None]
+            if hit:
+                hit[0]["sub"] = (int(p), int(f), int(s))
+        elif body.startswith("CHECK "):
+            if cur is None:
+                continue
+            _, mark, ctext = body.split(" ", 2)
+            st = {"PASS": "\u2713", "FAIL": "\u2717", "SKIP": "\u2013"}.get(mark)
+            if st:
+                cur["checks"].append({"st": st, "text": ctext, "ev": []})
+        elif body.startswith("CTX "):
+            if cur is None:
+                continue
+            ctext = body[4:]
+            if ctext.startswith("- "):
+                cur["notes"].append(ctext[2:])
+            elif cur["checks"]:
+                cur["checks"][-1]["ev"].append(ctext)
+            else:
+                cur["ctx"].append(ctext)
+        elif body.startswith(("TOTAL ", "VERDICT ", "MODE ", "TARGET ", "TS ")):
+            k, v = body.split(" ", 1)
+            meta[k] = v
+    return suites, meta
+
+def parse_legacy(lines):
+    # Hardened fallback for audit output without sentinels (older versions).
+    # Detail-section suite headers are 4-space indented ("    D. Gate ...");
+    # the 2-space "  D. ..." rows in the Summary section must NOT open new
+    # suites (a `seen_summary` guard). Parsing stops attributing text at
+    # Summary/Findings so post-suite text is never misattributed, and unknown
+    # modes default to UNKNOWN (never SIMULATED).
+    suites, cur, meta = [], None, {}
+    seen_summary = False
+    for ln in lines:
+        if re.match(r"^  Summary\s*$", ln):
+            seen_summary = True
+            cur = None
+            continue
+        if re.match(r"^  Findings\s*$", ln):
+            cur = None
+            continue
+        m = re.match(r"^    ([A-Z])\. (.+?)\s*$", ln)
+        if m and not seen_summary:
+            cur = {"letter": m.group(1), "name": m.group(2),
+                   "checks": [], "notes": [], "ctx": [], "sub": None}
+            suites.append(cur)
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"^  ([✓✗–]) (.*)$", ln)
+        if m:
+            cur["checks"].append({"st": m.group(1), "text": m.group(2), "ev": []})
+            continue
+        m = re.match(r"^    (\d+) passed · (\d+) failed · (\d+) skipped$", ln)
+        if m:
+            cur["sub"] = tuple(map(int, m.groups()))
+            continue
+        m = re.match(r"^    - (.*)$", ln)
+        if m:
+            cur["notes"].append(m.group(1))
+            continue
+        m = re.match(r"^ {4,}(\S.*)$", ln)
+        if m and cur["sub"] is None:
+            if m.group(1).startswith("- "):
+                cur["notes"].append(m.group(1)[2:])
+            elif cur["checks"]:
+                cur["checks"][-1]["ev"].append(m.group(1))
+            else:
+                cur["ctx"].append(m.group(1))
+            continue
+    tm = (re.search(r"^  Total: (\d+) passed \u00b7 (\d+) failed \u00b7 (\d+) skipped", text, re.M)
+          or re.search(r"Total: (\d+) passed \u00b7 (\d+) failed \u00b7 (\d+) skipped", text))
+    if tm:
+        meta["TOTAL"] = " ".join(tm.groups())
+    vm = re.search(r"VERDICT: (CLEAN|ATTENTION)", text)
+    if vm:
+        meta["VERDICT"] = "VERDICT: " + vm.group(1)
+    mm = re.search(r"^  mode: (SIMULATED|LIVE-FIRE)", text, re.M)
+    if mm:
+        meta["MODE"] = mm.group(1)
+    tsm = re.search(r"^  (\d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+)", text, re.M)
+    if tsm:
+        meta["TS"] = tsm.group(1)
+    tgm = re.search(r"target: (\S+)", text)
+    if tgm:
+        meta["TARGET"] = tgm.group(1)
+    return suites, meta
+
+suites, meta = parse_machine(lines)
+if not suites:
+    suites, meta = parse_legacy(lines)
+if not suites:
+    die("no suites parsed from audit output (format drift or crashed run) — refusing to write a misleading report")
+if any(s["sub"] is None for s in suites):
+    die("audit output is missing a suite subtotal line (incomplete run) — refusing to write a misleading report")
+if [s["letter"] for s in suites] != ["A", "B", "C", "D", "E"]:
+    die("unexpected suite sequence from audit output — refusing to write a misleading report")
+
+total = tuple(map(int, meta["TOTAL"].split())) if "TOTAL" in meta else None
+if total is None:
+    total = (sum(s["sub"][0] for s in suites), sum(s["sub"][1] for s in suites),
+             sum(s["sub"][2] for s in suites))
+verdict_word = meta.get("VERDICT", "").split(" ")[1] if meta.get("VERDICT", "").startswith("VERDICT: ") else "?"
+if verdict_word not in ("CLEAN", "ATTENTION"):
+    verdict_word = "INCOMPLETE"
+mode = meta.get("MODE", "UNKNOWN")
+if mode not in ("SIMULATED", "LIVE-FIRE"):
+    mode = "UNKNOWN"
+ts = meta.get("TS", "")
+tgt = meta.get("TARGET", "")
+
+# ---- adversarial results ----
+adv_text = open(adv_src, errors="replace").read()
+am = re.search(r"adversarial-run: (\d+)/(\d+) cases matched", adv_text)
+tm = re.search(r"block-tier recall (\d+)/(\d+) \u00b7 review-tier recall (\d+)/(\d+) \u00b7 clean precision (\d+)/(\d+)", adv_text)
+mismatches = re.findall(r"MISMATCH\s+(\S+)\s+want rc=(\d+) got (?:rc=)?(\S+)", adv_text)
+adv = None
+if am:
+    adv = {"matched": int(am.group(1)), "total": int(am.group(2)), "mismatches": mismatches}
+    if tm:
+        g = list(map(int, tm.groups()))
+        adv["tiers"] = {"block": (g[0], g[1]), "review": (g[2], g[3]), "clean": (g[4], g[5])}
+
+clean = (verdict_word == "CLEAN" and adv_rc == 0)
+badge_word = verdict_word if verdict_word in ("CLEAN", "ATTENTION") else "INCOMPLETE"
+
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+def scrub(s):
+    return EMAIL_RE.sub("[redacted]", s)
 
 def callout(s):
     n = s["name"].split(" (")[0]
     p, f, sk = s["sub"] or (0, 0, 0)
+    if s["letter"] == "F":
+        if adv is None:
+            return "\U0001F534 Detection performance: adversarial runner failed — see transcript."
+        mm, tt = adv["matched"], adv["total"]
+        if mm == tt:
+            return f"\U0001F7E2 Detection performance: {mm}/{tt} corpus cases matched expected verdicts."
+        return f"\U0001F534 Detection performance: {tt - mm} of {tt} corpus cases mismatched."
     if f:
-        return f"\U0001F534 {n}: {f} of {p+f+sk} failed — red, needs attention."
-    if s["letter"] == "E":
+        return f"\U0001F534 {n}: {f} of {p + f + sk} failed — red, needs attention."
+    if "residual" in s["name"].lower():
         return f"\U0001F7E1 {n}: {len(s['notes'])} known paths reported and tracked — none silent."
+    if p == 0 and f == 0 and sk == 0:
+        return f"\u26AA {n}: no checks ran — treat as unknown."
     if p == 0 and sk:
         why = s["checks"][0]["text"] if s["checks"] else "not run"
         why = re.sub(r"\[.*?\]", "", why).strip()
-        return f"⚪ {n}: skipped — {why}."
+        return f"\u26AA {n}: skipped — {why}."
     tail = f", {sk} skipped" if sk else ""
-    return f"\U0001F7E2 {n}: {p} of {p+sk} green{tail}."
+    return f"\U0001F7E2 {n}: {p} of {p + sk} green{tail}."
 
-clean = verdict[0] == "CLEAN"
+def tested_blurb(s):
+    letter, (p, f, sk) = s["letter"], s["sub"]
+    total_n = p + f + sk
+    if letter == "A":
+        return (f"{total_n} installation checks on this machine, just now: gate binaries present, executable and parse-clean; "
+                f"send shims shadow the real CLIs on PATH; fixtures present and non-empty; adversarial corpus intact.")
+    if letter == "B":
+        transport = ("simulated through fake real binaries — nothing was sent" if mode == "SIMULATED"
+                     else "live-fire subset over the genuine shim \u2192 gate \u2192 real-binary path to the owner's own accounts" if mode == "LIVE-FIRE"
+                     else "transport unverified (mode unknown)")
+        return (f"{total_n} red-team checks ({transport}). Block-tier payloads must be refused with rc=1 and the real binary uninvoked; "
+                f"review-tier payloads refused without approval (rc=2); clean payloads pass (rc=0).")
+    if letter == "C":
+        return (f"{total_n} static checks on the protection wiring (agent-manual mandates, briefing policy, cron shim-PATH wiring, "
+                f"scenario coverage map, public-repo denylist scan, fixture purity) — {p} passed"
+                + (f", {f} failed" if f else "") + (f", {sk} skipped" if sk else "") + ".")
+    if letter == "D":
+        if any(c["st"] == "\u2013" for c in s["checks"]):
+            return "Gate audit log not found — no gated send has been attempted yet; nothing to review."
+        n = next((c for c in s["ctx"] if "gate decisions logged" in c), "")
+        return f"Gate audit log reviewed{f' ({n})' if n else ''}; blocked attempts and approval overrides surfaced in the evidence."
+    if letter == "E":
+        return "Residual paths with no technical choke point, tracked openly: " + "; ".join(s["notes"]) + "."
+    if letter == "F":
+        if adv is None or "tiers" not in adv:
+            return "Adversarial runner did not produce figures — see the raw transcript."
+        b, r, c = adv["tiers"]["block"], adv["tiers"]["review"], adv["tiers"]["clean"]
+        return (f"{adv['matched']}/{adv['total']} corpus cases matched expected verdicts "
+                f"(block-tier recall {b[0]}/{b[1]}, review-tier recall {r[0]}/{r[1]}, clean precision {c[0]}/{c[1]}). "
+                f"Detector check — no sends in either mode.")
+    return f"{total_n} checks ({p} passed, {f} failed, {sk} skipped)."
 
-# What was actually tested, per suite — the concrete data behind the callout.
-TESTED = {
-    "A": "Verified on this machine, just now: all four gate binaries exist, are executable, and parse cleanly; both send shims (Gmail, Messenger) shadow the real CLIs on PATH, with the real binaries still reachable behind them.",
-    "B": "29 synthetic payloads fired at both gates and all five send paths: fake API keys, fake private keys, test SSN/card shapes (must block, rc=1), figures and phone numbers (must refuse without approval, rc=2), and clean text (must pass, rc=0). Every decision matched the expected exit code, and every blocked send shows invoked=0 — the real CLI was never reached.",
-    "C": "Static checks on the protection wiring: the agent manual mandates the shim PATH and brief gating, the briefing policy and free-share zones are defined, and all four daily-memory-refresh cron prompts export the shim PATH.",
-    "D": "Looked for the gate audit log at ~/workspace/memory-sync/egress-gate.log — not found, which means no gated send has been attempted yet. Nothing to review.",
-    "E": "Residual paths with no technical choke point, tracked openly rather than silently: browser-task sends (separate VM), absolute-path shim bypass, voice calls, and mandate-only brief gating.",
-}
+# findings: failed checks + adversarial mismatches, auto-expanded
+findings = []
+for s in suites:
+    for c in s["checks"]:
+        if c["st"] == "\u2717":
+            ev = scrub(c["ev"][0]) if c["ev"] else ""
+            findings.append((f"[{s['letter']}] {scrub(c['text'])}", ev))
+for name, want, got in mismatches:
+    findings.append((f"[F] adversarial mismatch {name}: want rc={want}, got rc={got}", ""))
 
 cards = []
-for s in suites:
-    p, f, sk = s["sub"] or (0, 0, 0)
-    cls = "red" if f else ("ok" if p else "skip")
+def render_card(s, extra=""):
+    p, f, sk = s["sub"]
+    cls = "red" if (f or s["letter"] == "F" and adv is None) else ("ok" if p else "skip")
+    if s["letter"] == "F" and adv is not None and adv["matched"] != adv["total"]:
+        cls = "red"
     items = "".join(
-        f'<li class="{("pass" if c["st"]=="✓" else ("skip" if c["st"]=="–" else "fail"))}">'
-        f'<span class="mark">{html.escape(c["st"])}</span>{html.escape(c["text"])}</li>'
+        f'<li class="{("pass" if c["st"] == chr(0x2713) else ("skip" if c["st"] == chr(0x2013) else "fail"))}">'
+        f'<span class="mark" aria-hidden="true">{c["st"]}</span><span>{html.escape(scrub(c["text"]))}'
+        + (f'<br><span class="cev">{html.escape(scrub(c["ev"][0]))}</span>' if c["ev"] else "")
+        + "</span></li>"
         for c in s["checks"])
-    notes = "".join(f"<li>{html.escape(n)}</li>" for n in s["notes"])
-    n_items = len(s["checks"]) or len(s["notes"])
+    notes = "".join(f"<li>{html.escape(scrub(n))}</li>" for n in s["notes"])
+    ctx = "".join(f"<li>{html.escape(scrub(c))}</li>" for c in s["ctx"])
+    n_items = len(s["checks"]) or len(s["notes"]) or len(s["ctx"])
     ev_word = "item" if n_items == 1 else "items"
+    co = callout(s)
+    emoji, rest = co.split(" ", 1)
+    lid = f"callout-{s['letter']}"
     cards.append(f"""
-    <section class="card {cls}">
-      <div class="card-head" role="button" tabindex="0" aria-expanded="false">
-        <div class="head-text">
-          <p class="callout">{html.escape(callout(s))}</p>
-          <p class="subtotal">{p} passed · {f} failed · {sk} skipped</p>
-        </div>
-        <span class="chev" aria-hidden="true">▸</span>
-      </div>
-      <div class="detail" hidden>
-        <p class="tested">{html.escape(TESTED.get(s["letter"], ""))}</p>
-        <p class="ev-label">Full evidence ({n_items} {ev_word})</p>
-        <ul class="evidence">{items or notes}</ul>
+    <section class="card {cls}" aria-labelledby="{lid}">
+      <button class="card-head" aria-expanded="false" aria-controls="detail-{s['letter']}">
+        <span class="head-text">
+          <h2 class="callout" id="{lid}"><span aria-hidden="true">{emoji}</span> {html.escape(rest)}</h2>
+          <span class="subtotal">{p} passed \u00b7 {f} failed \u00b7 {sk} skipped</span>
+        </span>
+        <span class="chev" aria-hidden="true">\u25b8</span>
+      </button>
+      <div class="detail" id="detail-{s['letter']}" role="region" aria-labelledby="{lid}" hidden>
+        <p class="tested">{html.escape(tested_blurb(s))}</p>
+        {('<p class="ops-label">Operational notes</p><ul class="notes">' + ctx + "</ul>") if ctx and s["letter"] != "D" else ""}
+        {extra}
+        <h3 class="ev-label">Full evidence ({n_items} {ev_word})</h3>
+        <ul class="evidence">{items or notes or ctx}</ul>
       </div>
     </section>""")
+
+for s in suites:
+    render_card(s)
+
+# adversarial card F
+fletter = "F"
+fsub = (adv["matched"], adv["total"] - adv["matched"], 0) if adv else (0, 0, 0)
+fsuite = {"letter": "F", "name": "Detection performance (adversarial corpus)", "checks": [], "notes": [], "ctx": [], "sub": fsub}
+cases_html = ""
+if adv:
+    rows = []
+    for ln in open(corpus_src, errors="replace").read().splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        parts = ln.split("|", 2)
+        if len(parts) != 3:
+            continue
+        name, want = parts[0], parts[1]
+        mm = next((m for m in mismatches if m[0] == name), None)
+        got = mm[2] if mm else want
+        okc = got == want
+        rows.append(f'<tr><td>{html.escape(name)}</td><td>rc={html.escape(want)}</td>'
+                    f'<td>rc={html.escape(got)}</td>'
+                    f'<td class="{"cok" if okc else "cbad"}">{"\u2713" if okc else "\u2717"}</td></tr>')
+    tier_line = ""
+    if "tiers" in adv:
+        b, r, c = adv["tiers"]["block"], adv["tiers"]["review"], adv["tiers"]["clean"]
+        tier_line = (f'<p class="tiers">block-tier recall {b[0]}/{b[1]} \u00b7 review-tier recall {r[0]}/{r[1]} '
+                     f'\u00b7 clean precision {c[0]}/{c[1]}</p>')
+    cases_html = (tier_line + '<div class="tablewrap"><table class="cases"><thead><tr>'
+                  '<th scope="col">case</th><th scope="col">want</th><th scope="col">got</th>'
+                  '<th scope="col"><span aria-hidden="true">match</span></th></tr></thead><tbody>'
+                  + "".join(rows) + "</tbody></table></div>")
+render_card(fsuite, extra=cases_html)
+
+modebar = {
+    "SIMULATED": ('sim', '<strong>SIMULATED</strong> \u2014 fake binaries; nothing was sent.'),
+    "LIVE-FIRE": ('live', '<strong>LIVE-FIRE</strong> \u2014 real sends to the owner\u2019s own accounts; synthetic payloads only.'),
+    "UNKNOWN": ('unknown', '<strong>MODE UNKNOWN</strong> \u2014 the mode could not be determined from the audit output; treat this report as unreliable.'),
+}[mode]
+
+findings_html = ""
+if findings:
+    rows = "".join(
+        f'<li><strong>{html.escape(t)}</strong>' + (f'<br><span class="fev">{html.escape(e)}</span>' if e else "") + "</li>"
+        for t, e in findings)
+    findings_html = f"""
+<section class="findings" aria-labelledby="findings-h">
+  <h2 id="findings-h">Findings ({len(findings)})</h2>
+  <ul>{rows}</ul>
+</section>"""
 
 page = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Leakage validation — {verdict[0]}</title>
+<title>Leakage validation \u2014 {badge_word}</title>
 <style>
 :root{{--bg:#f6f7f9;--fg:#1c1e21;--card:#fff;--mut:#6b7280;--ok:#15803d;--bad:#b91c1c;
 --line:#e5e7eb;--hero1:#0f172a;--hero2:#1e3a5f}}
@@ -128,47 +370,78 @@ background:var(--bg);color:var(--fg);line-height:1.5}}
 letter-spacing:.08em;font-size:.85rem}}
 .badge.ok{{background:#166534}}.badge.bad{{background:#991b1b}}
 .meta{{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:.8rem;color:#cbd5e1}}
-.mode{{font-weight:700;padding:2px 10px;border-radius:999px}}
-.mode.sim{{background:#1e3a5f;color:#cbd5e1}}
-.mode.live{{background:#7c2d12;color:#fed7aa}}
+.modebar{{padding:10px 20px;font-size:.85rem;border-bottom:1px solid var(--line)}}
+.modebar.sim{{background:#e2e8f0;color:#1e3a5f}}
+.modebar.live{{background:#ffedd5;color:#7c2d12}}
+.modebar.unknown{{background:#fef3c7;color:#92400e}}
+@media(prefers-color-scheme:dark){{
+.modebar.sim{{background:#1e293b;color:#cbd5e1}}
+.modebar.live{{background:#431407;color:#fed7aa}}
+.modebar.unknown{{background:#451a03;color:#fde68a}}}}
 .wrap{{max-width:640px;margin:0 auto;padding:16px}}
 .card{{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--mut);
-border-radius:12px;padding:14px 16px;margin:12px 0}}
+border-radius:12px;padding:0;margin:12px 0}}
 .card.ok{{border-left-color:var(--ok)}}.card.red{{border-left-color:var(--bad)}}
+.card-head{{font:inherit;color:inherit;background:none;border:0;width:100%;text-align:left;
+padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;
+-webkit-tap-highlight-color:transparent;border-radius:12px}}
+.card-head:focus-visible{{outline:2px solid var(--ok);outline-offset:2px}}
+.head-text{{flex:1;min-width:0;display:block}}
 .callout{{margin:0 0 4px;font-weight:650;font-size:.95rem}}
-.subtotal{{margin:0 0 6px;color:var(--mut);font-size:.8rem}}
-.card-head{{display:flex;align-items:center;gap:10px;cursor:pointer;-webkit-tap-highlight-color:transparent}}
-.card-head:focus-visible{{outline:2px solid var(--ok);outline-offset:2px;border-radius:8px}}
-.head-text{{flex:1;min-width:0}}
+.subtotal{{color:var(--mut);font-size:.8rem}}
 .chev{{flex:none;color:var(--mut);font-size:1.1rem;transition:transform .18s ease}}
+@media (prefers-reduced-motion: reduce){{.chev{{transition:none}}}}
 .card.open .chev{{transform:rotate(90deg)}}
-.detail{{border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}}
+.detail{{border-top:1px dashed var(--line);margin:0 16px 14px;padding-top:10px}}
 .tested{{margin:0 0 8px;font-size:.85rem}}
-.ev-label{{margin:0;color:var(--mut);font-size:.78rem;font-weight:600}}
-.evidence{{list-style:none;margin:8px 0 0;padding:0;font-size:.82rem}}
-.evidence li{{padding:5px 0;border-top:1px dashed var(--line);display:flex;gap:8px}}
+.ops-label,.ev-label{{margin:0;color:var(--mut);font-size:.78rem;font-weight:600}}
+.evidence,.notes{{list-style:none;margin:8px 0 0;padding:0;font-size:.82rem}}
+.evidence li,.notes li{{padding:5px 0;border-top:1px dashed var(--line);display:flex;gap:8px}}
 .mark{{font-weight:700;flex:none}}.pass .mark{{color:var(--ok)}}.fail .mark{{color:var(--bad)}}
 .skip .mark{{color:var(--mut)}}
+.cev{{color:var(--mut);font-size:.78rem}}
+.findings{{background:var(--card);border:1px solid var(--bad);border-radius:12px;padding:14px 16px;margin:12px 0}}
+.findings h2{{margin:0 0 8px;font-size:1rem;color:var(--bad)}}
+.findings ul{{list-style:none;margin:0;padding:0;font-size:.85rem}}
+.findings li{{padding:6px 0;border-top:1px dashed var(--line)}}
+.fev{{color:var(--mut);font-size:.8rem}}
+.tiers{{font-size:.85rem;margin:0 0 8px}}
+.tablewrap{{overflow-x:auto}}
+table.cases{{border-collapse:collapse;width:100%;font-size:.8rem;margin:4px 0 8px}}
+table.cases th,table.cases td{{border:1px solid var(--line);padding:4px 8px;text-align:left}}
+.cok{{color:var(--ok);font-weight:700}}.cbad{{color:var(--bad);font-weight:700}}
+.transcript{{background:var(--card);border:1px solid var(--line);border-radius:12px;
+padding:14px 16px;margin:16px 0;font-size:.8rem}}
+.transcript summary{{cursor:pointer;font-weight:600}}
+.transcript h3{{font-size:.85rem;margin:12px 0 4px}}
+.transcript pre{{white-space:pre-wrap;word-break:break-word;background:var(--bg);
+border:1px solid var(--line);border-radius:8px;padding:10px;max-height:320px;overflow:auto;font-size:.75rem}}
 .total{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
 margin:16px 0;text-align:center}}
 .total b{{font-size:1.1rem}}
 footer{{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}}
 </style></head><body>
 <header class="hero">
-  <h1>🛡️ Leakage validation</h1>
-  <p>muse-leakage-guard · bin/leakage-audit</p>
-  <span class="badge {"ok" if clean else "bad"}">{verdict[0]}</span>
-  <div class="meta"><span>{html.escape(ts)}</span><span>target: {html.escape(tgt)}</span><span class="mode {"live" if mode == "LIVE-FIRE" else "sim"}">mode: {mode}</span></div>
+  <h1><span aria-hidden="true">\U0001F6E1\uFE0F</span> Leakage validation</h1>
+  <p>muse-leakage-guard \u00b7 bin/leakage-audit + bin/adversarial-run</p>
+  <span class="badge {"ok" if clean else "bad"}">{badge_word}</span>
+  <div class="meta"><span>{html.escape(ts)}</span><span>target: {html.escape(tgt)}</span></div>
 </header>
-<div class="wrap">
+<div class="modebar {modebar[0]}">{modebar[1]}</div>
+<main class="wrap">
+{findings_html}
 {"".join(cards)}
-<div class="total"><b>Total: {total[0]} passed · {total[1]} failed · {total[2]} skipped</b>
-<p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">VERDICT: {verdict[0]}{" — " + html.escape(verdict[1]) if verdict[1] else ""}</p></div>
-<footer>{"Real sends to the owner's own accounts — synthetic payloads only." if mode == "LIVE-FIRE" else "Synthetic payloads only — nothing real was sent or disclosed."}</footer>
-</div>
+<div class="total"><b>Total: {total[0]} passed \u00b7 {total[1]} failed \u00b7 {total[2]} skipped</b>
+<p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">AUDIT VERDICT: {verdict_word}{" \u00b7 adversarial: " + str(adv["matched"]) + "/" + str(adv["total"]) + " matched" if adv else " \u00b7 adversarial: runner failed"}</p></div>
+<details class="transcript"><summary>Raw transcripts</summary>
+<h3>bin/leakage-audit</h3><pre>{html.escape(text)}</pre>
+<h3>bin/adversarial-run</h3><pre>{html.escape(adv_text)}</pre>
+</details>
+<footer>{"Real sends to the owner's own accounts \u2014 synthetic payloads only." if mode == "LIVE-FIRE" else "Synthetic payloads only \u2014 nothing real was sent or disclosed."}</footer>
+</main>
 <script>
 document.querySelectorAll('.card-head').forEach(function(head){{
-  function toggle(){{
+  head.addEventListener('click', function(){{
     var card = head.closest('.card');
     var detail = card.querySelector('.detail');
     var open = detail.hasAttribute('hidden');
@@ -176,19 +449,17 @@ document.querySelectorAll('.card-head').forEach(function(head){{
     else {{ detail.setAttribute('hidden', ''); }}
     card.classList.toggle('open', open);
     head.setAttribute('aria-expanded', open ? 'true' : 'false');
-  }}
-  head.addEventListener('click', toggle);
-  head.addEventListener('keydown', function(e){{
-    if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); toggle(); }}
   }});
 }});
 </script>
 </body></html>"""
-open(dst, "w").write(page)
+tmp = dst + ".tmp." + str(os.getpid())
+open(tmp, "w").write(page)
+os.replace(tmp, dst)   # atomic: readers never see a half-written report
 print("wrote", dst)
 PYEOF
 PYRC=$?
-rm -f "$TMP"
 if [ $PYRC -ne 0 ]; then echo "leakage-report: HTML generation failed" >&2; exit 3; fi
 echo "REPORT: $OUT"
-exit $RC
+if [ "$RC" -ne 0 ] || [ "$ADV_RC" -ne 0 ]; then exit 1; fi
+exit 0

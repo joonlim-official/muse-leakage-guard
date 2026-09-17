@@ -233,13 +233,19 @@ Verdict key:
   public — a stock price, a public business phone number — creating
   friction and approval fatigue, which trains the user to approve
   reflexively.
-- **Conclusion:** PROTECTED (by classification rule)
+- **Conclusion:** PROTECTED (by classification rule, with a documented
+  conservative default)
 - **Details:** Standing rule: classify public vs private *before*
   escalating. Public = market prices, published prices, public business
   numbers — handled mechanically, never asked about. Only genuinely
   private figures, personal contact info, and credentials reach the user.
-  Approval fatigue is a security risk in its own right; this rule exists
-  to prevent it.
+  Conservative default: dollar-shaped figures that have NOT been ruled
+  public are review-tier (rc=2), not block-tier — the gate asks, it does
+  not pretend to know. The exemption for user-ruled-public literals lives
+  in the installation's `.egress-allowlist` (review tier only; never for
+  block-tier shapes), not in the gate's patterns — so the corpus case
+  `clean_price` expects rc=2 by design. Approval fatigue is a security
+  risk in its own right; this rule exists to prevent it.
 
 ---
 

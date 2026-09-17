@@ -107,6 +107,17 @@ BOLD_RULE="$(printf '═%.0s' $(seq 1 $((WIDTH-2))))"
 
 shorten() { printf '%s' "${1//$HOME/\~}"; }   # $HOME -> ~ for display
 
+# Machine-readable sentinels for bin/leakage-report: structural lines the
+# evidence path cannot accidentally produce (a hostile check name or wrapped
+# CLI output can never forge them). Emitted only when MOCHI_AUDIT_MACHINE=1 —
+# leakage-report sets it; terminal output is unchanged.
+msent() {
+  [ "${MOCHI_AUDIT_MACHINE:-}" = "1" ] || return 0
+  local p="$*"
+  p="${p//$'\n'/ }"; p="${p//@@@/[at]}"
+  printf '@@@ %s\n' "$p"
+}
+
 # Wrapped check line: "  ✓ text", continuations indented.
 wcheck() {
   printf '%s\n' "$*" | fold -s -w "$((WIDTH-4))" | sed 's/ *$//' | sed '1s/^/  /; 2,$s/^/    /'
@@ -116,16 +127,18 @@ wcheck() {
 wdetail() {
   { if [ $# -gt 0 ]; then printf '%s\n' "$*"; else cat; fi; } \
     | while IFS= read -r line; do
+        msent "CTX $line"
         printf '%s\n' "$line" | fold -w "$((WIDTH-6))" | sed 's/ *$//' | sed '1s/^/    /; 2,$s/^/      /'
       done
 }
 
-ok()   { PASS=$((PASS+1)); wcheck "✓ $(shorten "$1")"; }
+ok()   { PASS=$((PASS+1)); msent "CHECK PASS $(shorten "$1")"; wcheck "✓ $(shorten "$1")"; }
 # bad <name> [evidence] [suggestion] — every failure carries a concrete
 # suggested remediation. This skill validates and suggests; it never
 # applies fixes — remediation belongs to the memory skill / the agent.
 bad()  { FAIL=$((FAIL+1))
          _blabel="$1"; [ -n "$SUITE_LETTER" ] && _blabel="[$SUITE_LETTER] $1"
+         msent "CHECK FAIL $(shorten "$_blabel")"
          wcheck "✗ $(shorten "$_blabel")"
          FINDINGS="${FINDINGS}$(wcheck "✗ $(shorten "$_blabel")")"$'\n'
          if [ -n "${2:-}" ]; then
@@ -137,21 +150,19 @@ bad()  { FAIL=$((FAIL+1))
            FINDINGS="${FINDINGS}$(printf '%s\n' "Suggestion: $3" | wdetail)"$'\n'
          fi
          unset _blabel; }
-skip() { SKIPPED=$((SKIPPED+1)); wcheck "– $(shorten "$1") [$(shorten "$2")]"; }
+skip() { SKIPPED=$((SKIPPED+1)); msent "CHECK SKIP $(shorten "$1") [$(shorten "$2")]"; wcheck "– $(shorten "$1") [$(shorten "$2")]"; }
 
 begin_suite() { # <letter> <name>
   SUITE_LETTER="$1"; SUITE_NAME="$2"; sP=$PASS; sF=$FAIL; sS=$SKIPPED
+  msent "SUITE $1 $2"
   printf '\n'
   printf '  %s. %s\n' "$1" "$2" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/     /'
   printf '  %s\n' "$RULE"
 }
 end_suite() {
   local p=$((PASS-sP)) f=$((FAIL-sF)) s=$((SKIPPED-sS)) label
-  case "$SUITE_LETTER" in
-    A) label="Install integrity";; B) label="Red-team gates";;
-    C) label="Coverage checks";;   D) label="Log review";;
-    *) label="Residuals";;
-  esac
+  label="${SUITE_NAME%% (*}"   # suite name without parenthetical subtitle
+  msent "ENDSUITE $SUITE_LETTER $p $f $s"
   printf '  %s\n' "$RULE"
   printf '    %d passed · %d failed · %d skipped\n' "$p" "$f" "$s"
   ROWS="${ROWS}${SUITE_LETTER}|${label}|${p}|${f}|${s}"$'\n'
@@ -160,8 +171,11 @@ end_suite() {
 print_header() {
   printf '\n  muse-leakage-guard · leakage-audit\n'
   printf '  %s\n' "$(date '+%Y-%m-%d %H:%M %Z')"
+  msent "TS $(date '+%Y-%m-%d %H:%M %Z')"
   printf '%s\n' "target: $(shorten "$MEM_SKILL")" | fold -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  msent "TARGET $(shorten "$MEM_SKILL")"
   printf '%s\n' "mode: $AUDIT_MODE" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  msent "MODE $AUDIT_MODE_SHORT"
   printf '  %s\n' "$BOLD_RULE"
 }
 
@@ -196,7 +210,9 @@ print_summary() {
     v="VERDICT: ATTENTION — $FAIL finding(s) need review."
   fi
   printf '%s\n' "mode: $AUDIT_MODE" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  msent "TOTAL $PASS $FAIL $SKIPPED"
   printf '%s\n' "$v" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  msent "VERDICT $v"
   if [ "$FAIL" -gt 0 ]; then
     printf '\n  Findings\n'
     printf '  %s\n' "$RULE"
@@ -240,7 +256,7 @@ for fix in clean.txt secret.txt secret2.txt ssn.txt card.txt figure.txt phone.tx
   elif [ ! -s "$FIX/$fix" ]; then bad "fixture $fix is empty (vacuous test)" "" "restore the fixture content from the repo, then re-run this audit."
   else ok "fixture $fix present and non-empty"; fi
 done
-corpus_cases="$(grep -vcE '^[[:space:]]*(#|$)' "$SKILL_DIR/bin/adversarial-corpus.txt" 2>/dev/null || echo 0)"
+corpus_cases="$(grep -vcE '^[[:space:]]*(#|$)' "$SKILL_DIR/bin/adversarial-corpus.txt" 2>/dev/null || true)"
 if [ "$corpus_cases" -ge 1 ]; then ok "adversarial corpus has $corpus_cases cases"
 else bad "adversarial corpus is empty — 0/0 would be a vacuous pass" "" "restore bin/adversarial-corpus.txt from the repo, then re-run this audit."; fi
 
@@ -276,16 +292,22 @@ else
   mkdir -p "$T/fakebin"
   cat > "$T/fakebin/real-gws" <<'EOF'
 #!/usr/bin/env bash
-echo "REAL-GWS-INVOKED args: $*"
+# Invocation sentinel: the audit asserts on this file, not on stdout text
+# (a crashing binary could echo a marker without touching it). Arg values are
+# hashed, never echoed — failure evidence must not carry fixture content.
+touch "$T_INVOKED_DIR/invoked-any"
+echo "REAL-GWS-INVOKED argv-sha256=$(printf '%s' "$*" | sha256sum | cut -d' ' -f1)"
 exit 0
 EOF
   cat > "$T/fakebin/real-msg" <<'EOF'
 #!/usr/bin/env bash
-echo "REAL-MSG-INVOKED args: $*"
+touch "$T_INVOKED_DIR/invoked-any"
+echo "REAL-MSG-INVOKED argv-sha256=$(printf '%s' "$*" | sha256sum | cut -d' ' -f1)"
 echo "---stdin---"; cat; echo "---endstdin---"
 exit 0
 EOF
   chmod +x "$T/fakebin"/real-*
+  export T_INVOKED_DIR="$T"
   export MOCHI_REAL_HATCH_GWS_CLI="$T/fakebin/real-gws"
   export MOCHI_REAL_HATCH_MESSENGER_CLI="$T/fakebin/real-msg"
 fi
@@ -295,9 +317,14 @@ export PATH="$SHIMDIR:$PATH"
 gate_expect() { # <name> <gate:egress|brief> <fixture> <want_rc>
   local name="$1" gate="$2" fix="$3" want="$4" rc
   if [ "$gate" = brief ]; then
-    "$MEM_SKILL/bin/brief-gate" --brief-file "$FIX/$fix" --task "leakage-audit:$name" >/dev/null 2>&1; rc=$?
+    timeout 30 "$MEM_SKILL/bin/brief-gate" --brief-file "$FIX/$fix" --task "leakage-audit:$name" >/dev/null 2>&1; rc=$?
   else
-    "$MEM_SKILL/bin/egress-gate" --content-file "$FIX/$fix" --context "leakage-audit:$name" >/dev/null 2>&1; rc=$?
+    timeout 30 "$MEM_SKILL/bin/egress-gate" --content-file "$FIX/$fix" --context "leakage-audit:$name" >/dev/null 2>&1; rc=$?
+  fi
+  if [ "$rc" -eq 124 ]; then
+    bad "$name" "gate timed out after 30s (did not refuse or pass in time)" \
+      "investigate why the gate hung on fixture $fix; do not trust verdicts from this installation until it answers."
+    return
   fi
   if [ "$rc" -eq "$want" ]; then ok "$name (rc=$rc)"
   else
@@ -313,8 +340,14 @@ send_expect() { # <name> <want_rc> <want_invoked 0|1> -- cmd...
   local name="$1" want_rc="$2" want_inv="$3"; shift 3
   [ "${1:-}" = "--" ] && shift
   local out rc inv=0
-  out="$("$@" 2>&1)"; rc=$?
-  case "$out" in *REAL-*-INVOKED*) inv=1;; esac
+  rm -f "$T/invoked-any"   # per-check sentinel; the fake real binary touches it
+  out="$(timeout 30 "$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq 124 ]; then
+    bad "$name" "send timed out after 30s (the shim or gate hung)" \
+      "investigate the shim path for this subcommand; do not trust verdicts from this installation until sends answer."
+    return
+  fi
+  [ -f "$T/invoked-any" ] && inv=1
   if [ "$rc" -eq "$want_rc" ] && [ "$inv" -eq "$want_inv" ]; then ok "$name (rc=$rc invoked=$inv)"
   else
     if [ "$want_inv" = "0" ] && [ "$inv" = "1" ]; then
@@ -392,10 +425,10 @@ else
   if [ -z "$_profile_addr" ]; then
     bad "live-fire: cannot determine Gmail identity" "" "the getProfile check failed; refusing to send without verifying the target belongs to the owner."
   elif [ "${_profile_addr,,}" != "${LIVE_EMAIL,,}" ]; then
-    bad "live-fire: target is not the owner's address" "MOCHI_TEST_EMAIL=$LIVE_EMAIL but the Gmail identity is $_profile_addr" "set MOCHI_TEST_EMAIL to the owner's own address (never anyone else's)."
+    bad "live-fire: target is not the owner's address" "MOCHI_TEST_EMAIL domain=${LIVE_EMAIL##*@} vs Gmail identity domain=${_profile_addr##*@} (full addresses redacted)" "set MOCHI_TEST_EMAIL to the owner's own address (never anyone else's)."
   else
     wdetail "live-fire target: $LIVE_EMAIL (verified against the Gmail profile)"
-    MARK="leakage-audit live-fire $(date +%Y%m%d-%H%M%S)"
+    MARK="leakage-audit live-fire $(date +%Y%m%d-%H%M%S)-$$"
     if [ -t 0 ]; then
       wdetail "Sending 3 test emails to the owner's own address ($LIVE_EMAIL). Ctrl-C now to abort."
       sleep 10
@@ -521,7 +554,7 @@ else skip "no egress denylist" "$DENYLIST missing or empty"; fi
 # check above catches the user's real literals; this catches any other
 # undeclared secret-shaped value before it can ship in a public fixture.
 SYNTH="$SKILL_DIR/bin/fixtures/SYNTHETIC.txt"
-SHAPES='[0-9]{3}-[0-9]{2}-[0-9]{4}|[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}|sk_(live|test)_[A-Za-z0-9]+|xox[bpas]-[A-Za-z0-9-]+|AIza[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|BEGIN [A-Z ]*PRIVATE KEY'
+SHAPES='[0-9]{3}-[0-9]{2}-[0-9]{4}|[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}|sk_(live|test)_[A-Za-z0-9]+|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[bpas]-[A-Za-z0-9-]+|AIza[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|BEGIN [A-Z ]*PRIVATE KEY'
 if [ -f "$SYNTH" ]; then
   undeclared=""
   while IFS= read -r tok; do

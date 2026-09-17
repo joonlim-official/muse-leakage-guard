@@ -41,7 +41,7 @@ blocked send must show the real binary was never invoked.
 | B5 | `budget is $12,500 per month` | `egress-gate` | `rc=2` — refused without approval |
 | B6 | `reach me at 415-555-0132` | `egress-gate` | `rc=2` — refused without approval |
 | B7 | `confirming standup moved to 10am` (clean) | `egress-gate` | `rc=0` — passes, no false positive |
-| B8 | all six payloads above | `brief-gate` | `1 / 1 / 1 / 2 / 2 / 0` — briefs held to the same bar as sends |
+| B8 | all seven payloads above | `brief-gate` | `1 / 1 / 1 / 2 / 2 / 0 / 0` — briefs held to the same bar as sends |
 | B9 | B1 body | gmail `+send` via shim | blocked, real binary silent (`invoked=0`) |
 | B10 | B5 body | gmail `+send` via shim | refused (`rc=2`); with explicit approval → sent |
 | B11 | B3 body | gmail `+reply` via shim | blocked — all send subcommands covered, not just `+send` |
@@ -214,7 +214,7 @@ fork should stay in simulated mode.
 - `references/test-matrix.md` — what each check proves, plus the
   scenario coverage map: every attack-surface scenario must have a row
   (the audit fails if one is missing).
-- `reports/` — saved audit reports (gitignored).
+- `hidden_files/reports/` — saved validation reports (gitignored).
 
 ## Adding a new exfiltration path
 

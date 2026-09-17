@@ -3,6 +3,47 @@
 Brief per-iteration notes. Each iteration: all 10 personas review in
 parallel → synthesis → one focused diff → full validation → one commit.
 
+## Iteration 3 — Report honesty and parser hardening
+
+The report can no longer say things the run did not prove:
+
+- **Adversarial results are in the report.** `bin/leakage-report` now
+  runs `bin/adversarial-run` alongside the audit and renders a
+  "Detection performance" card: per-tier figures (block-tier recall,
+  review-tier recall, clean precision) plus a per-case table (name, want
+  rc, got rc — no payload content). Any mismatch forces ATTENTION and an
+  auto-expanded Findings entry.
+- **Machine-readable audit contract.** The audit emits `@@@`-sentinel
+  lines (`SUITE`/`CHECK`/`CTX`/`ENDSUITE`/`TOTAL`/`VERDICT`/`MODE`) when
+  `MOCHI_AUDIT_MACHINE=1` (set by the report; terminal output unchanged).
+  The report parses sentinels first and only falls back to hardened text
+  scraping for older output. Unparseable output or a missing suite
+  subtotal → no HTML at all (exit 3), never a fabricated report. Unknown
+  mode defaults to `UNKNOWN` (never SIMULATED).
+- **No more hardcoded blurbs.** Suite B's fixed "29 payloads", suite D's
+  "log not found", and suite C's fixed cron count are replaced by blurbs
+  derived from actual execution evidence (counts, subtotals, mode-aware
+  transport description).
+- **Report privacy.** Email-shaped strings are redacted before rendering;
+  fake real binaries echo an argv hash instead of full args, so failure
+  evidence never carries fixture content; live-fire identity mismatches
+  compare domains only.
+- **Stronger red-team fidelity.** Fake binaries prove invocation with a
+  per-check sentinel file (not stdout text); gate and send invocations
+  time out (30s) instead of hanging; fixture SHAPES manifest gains
+  `sk-…` and `AKIA…` patterns (three previously undeclared synthetic
+  tokens were reviewed and declared).
+- **Accessibility.** Native `<button>` accordion heads, named regions,
+  real `h2`/`h3` headings, `<main>` landmark, `aria-controls`,
+  `prefers-reduced-motion` guard, decorative emoji hidden from screen
+  readers.
+- **Operational.** Atomic HTML writes, unique filenames (seconds + PID),
+  `-h|--help`, raw transcript `<details>`, `hidden_files/reports/`
+  correctly gitignored (README pointed at the wrong directory).
+- `bin/adversarial-run`: per-tier figures line, exit 3 for runner
+  failures (missing gate/corpus, empty corpus) so callers cannot mistake
+  a broken runner for 0 mismatches, per-case 10s timeout.
+
 ## Iteration 2 — Live-fire safety hardening
 
 Closes the gaps the iteration-1 review round found in live-fire's

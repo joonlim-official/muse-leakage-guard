@@ -19,3 +19,6 @@ sk_live_4eC39HqLyjWDarjtT1z
 sk_test_BQokikJOvBiI2HlWgH4o
 xoxb-12345-67890-AbCdEfGhIjKlMnOpQrStUvWx
 5550001234
+AKIAIOSFODNN7EXAMPLE
+sk-abcdefghijklmnopqrstuvwxyz1234567890ABCD
+sk-testfakekey1234567890abcdefgh

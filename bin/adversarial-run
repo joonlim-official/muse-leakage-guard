@@ -6,14 +6,25 @@
 # expected one. This is the precision/recall half of validation:
 # leakage-audit proves the plumbing; this proves the detectors.
 #
+# Also prints per-tier figures the report consumes:
+#   block-tier recall   = block cases refused with rc=1
+#   review-tier recall  = review cases refused without approval (rc=2)
+#   clean precision     = clean cases passed with rc=0
+# (Terminology: "clean precision" is the clean-class pass rate, not the
+# ML precision of the block class. Framed explicitly so the report does not
+# mislabel it.)
+#
 # All corpus values are synthetic (shaped to trip detectors, belonging
 # to nobody). Never add real private data here.
 #
 # Env (same as leakage-audit):
 #   PERSONAL_MEMORY_SKILL   memory skill under test
 #                           (default ~/workspace/skills/personal-memory-system)
-# Exit: 0 = every case matched, 1 = at least one mismatch (listed).
-# Exit 2 = usage error.
+# Exit: 0 = every case matched.
+# Exit: 1 = at least one mismatch (listed).
+# Exit: 2 = usage error.
+# Exit: 3 = the runner itself failed (gate/corpus missing, empty corpus) —
+#           callers must treat this as "unknown", never as 0 mismatches.
 set -u
 
 case "${1:-}" in
@@ -31,20 +42,34 @@ MEM_SKILL="${PERSONAL_MEMORY_SKILL:-$HOME/workspace/skills/personal-memory-syste
 GATE="$MEM_SKILL/bin/memory-egress-check"
 CORPUS="$SKILL_DIR/bin/adversarial-corpus.txt"
 
-[ -x "$GATE" ] || { echo "adversarial-run: gate not found: $GATE" >&2; exit 1; }
-[ -f "$CORPUS" ] || { echo "adversarial-run: corpus not found: $CORPUS" >&2; exit 1; }
+[ -x "$GATE" ] || { echo "adversarial-run: gate not found or not executable: $GATE" >&2; exit 3; }
+[ -f "$CORPUS" ] || { echo "adversarial-run: corpus not found: $CORPUS" >&2; exit 3; }
+
+TMPF="$(mktemp)"; trap 'rm -f "$TMPF"' EXIT
 
 pass=0; fail=0; failed_cases=""
+p1=0; f1=0; p2=0; f2=0; p0=0; f0=0   # per-tier: block(1) / review(2) / clean(0)
 while IFS='|' read -r name want content; do
   case "$name" in \#*|'') continue;; esac
   case "$want" in 0|1|2) ;; *)
     printf '  MALFORMED %s: want=%s (must be 0, 1, or 2)\n' "$name" "$want" >&2
     fail=$((fail+1)); continue;; esac
-  got="$(printf '%s' "$content" | "$GATE" >/dev/null 2>&1; echo $?)"
+  # Same invocation shape as the audit's gate_expect (file argument, no pipe)
+  # so the corpus and the audit exercise the gate identically.
+  printf '%s' "$content" > "$TMPF"
+  got="$(timeout 10 "$GATE" "$TMPF" >/dev/null 2>&1; echo $?)"
+  if [ "$got" = 124 ]; then
+    fail=$((fail+1))
+    failed_cases="${failed_cases}  MISMATCH $name: want rc=$want, got TIMEOUT (gate hung >10s)\n"
+    printf '  MISMATCH %-16s want rc=%s got TIMEOUT (gate hung >10s)\n' "$name" "$want" >&2
+    continue
+  fi
   if [ "$got" = "$want" ]; then
     pass=$((pass+1))
+    case "$want" in 1) p1=$((p1+1));; 2) p2=$((p2+1));; 0) p0=$((p0+1));; esac
   else
     fail=$((fail+1))
+    case "$want" in 1) f1=$((f1+1));; 2) f2=$((f2+1));; 0) f0=$((f0+1));; esac
     failed_cases="${failed_cases}  MISMATCH $name: want rc=$want, got rc=$got\n"
     printf '  MISMATCH %-16s want rc=%s got rc=%s\n' "$name" "$want" "$got" >&2
   fi
@@ -52,10 +77,11 @@ done < "$CORPUS"
 
 total=$((pass+fail))
 if [ "$total" -eq 0 ]; then
-  echo "adversarial-run: FAIL — corpus yielded 0 cases (empty or corrupted). A 0/0 pass is vacuous; restore bin/adversarial-corpus.txt." >&2
-  exit 1
+  echo "adversarial-run: runner failed — corpus yielded 0 cases (empty or corrupted). A 0/0 pass is vacuous; restore bin/adversarial-corpus.txt." >&2
+  exit 3
 fi
 echo "adversarial-run: $pass/$total cases matched expected verdicts."
+echo "adversarial-run: block-tier recall $p1/$((p1+f1)) · review-tier recall $p2/$((p2+f2)) · clean precision $p0/$((p0+f0))"
 if [ "$fail" -gt 0 ]; then
   printf '%b' "$failed_cases" >&2
   echo "Suggestion: tighten the missing pattern in $GATE (or fix the corpus expectation), then re-run." >&2
