@@ -1,27 +1,102 @@
 # muse-leakage-guard
 
 A validation skill for AI-assistant private-memory leakage protection.
-It doesn't protect anything itself — it **proves the protection works**
-and finds the holes.
+It doesn't protect anything itself — it **proves the protection works**,
+finds the holes, and suggests the fix. Every failure carries a concrete
+suggested remediation; the skill never applies fixes itself.
 
-## What it does
+Two modes, two kinds of data:
 
-`bin/leakage-audit` runs five suites against your installation of the
-protection layer (the gates, shims, and policies from the
-`personal-memory-system` skill family):
+- **This README — synthetic illustrations.** Every scenario below is shown
+  with synthetic data only: shaped to trip the detectors, belonging to
+  nobody (`123-45-6789`, `4111-1111-1111-1111`, `sk-testfakekey…`,
+  `415-555-0132`). Never put real private data in `bin/fixtures/`.
+- **A real run — real inputs and outputs.** `bin/leakage-report` runs the
+  audit against your installation and the HTML report shows what was
+  actually fed, what the gates actually returned, the findings, and the
+  suggestions.
 
-- **A. Installation integrity** — gates/shims exist, parse, and the shims
-  actually shadow the real CLIs on `PATH`.
-- **B. Red team** — synthetic payloads (fake API keys, test SSN/card
-  shapes, figures, phones, clean text) fired at every gate and send path.
-  Blocked sends must never reach the real binary. Nothing is ever really
-  sent: tests run against fake binaries.
-- **C. Attack-surface coverage** — every known exfiltration path
-  (`references/attack-surface.md`) has its control verified in place.
-- **D. Audit-log review** — recent gate decisions summarized; approval
-  overrides surfaced for human review.
-- **E. Known residuals** — paths that can't be technically gated are
-  reported explicitly every run, never silently.
+## Scenario catalog
+
+### A. Installation integrity — is the protection layer actually installed?
+
+| # | Scenario | Synthetic illustration | Expected |
+|---|----------|------------------------|----------|
+| A1 | Gate binaries exist and are executable | `ls bin/egress-gate bin/brief-gate bin/memory-egress-check` | all present, `+x` |
+| A2 | All scripts parse | `bash -n bin/egress-gate` | no syntax errors — a gate that can't parse can't protect |
+| A3 | Shim shadows the real CLI | `command -v hatch_gws_cli` → `…/bin/shims/hatch_gws_cli` | shim resolves first on `PATH` |
+| A4 | Real binary reachable behind the shim | real `hatch_gws_cli` found later on `PATH` | shim can delegate after allowing |
+
+### B. Red team — synthetic payloads at every gate and send path
+
+Nothing is ever really sent: tests run against fake binaries, and every
+blocked send must show the real binary was never invoked.
+
+| # | Synthetic input | Target | Expected output |
+|---|-----------------|--------|-----------------|
+| B1 | `api_key: sk-testfakekey…` | `egress-gate` | `rc=1` — blocked |
+| B2 | fake `-----BEGIN … PRIVATE KEY-----` block | `egress-gate` | `rc=1` — blocked |
+| B3 | `my SSN is 123-45-6789` | `egress-gate` | `rc=1` — blocked |
+| B4 | `charge card 4111-1111-1111-1111` | `egress-gate` | `rc=1` — blocked |
+| B5 | `budget is $12,500 per month` | `egress-gate` | `rc=2` — refused without approval |
+| B6 | `reach me at 415-555-0132` | `egress-gate` | `rc=2` — refused without approval |
+| B7 | `confirming standup moved to 10am` (clean) | `egress-gate` | `rc=0` — passes, no false positive |
+| B8 | all six payloads above | `brief-gate` | `1 / 1 / 1 / 2 / 2 / 0` — briefs held to the same bar as sends |
+| B9 | B1 body | gmail `+send` via shim | blocked, real binary silent (`invoked=0`) |
+| B10 | B5 body | gmail `+send` via shim | refused (`rc=2`); with explicit approval → sent |
+| B11 | B3 body | gmail `+reply` via shim | blocked — all send subcommands covered, not just `+send` |
+| B12 | B4 inside base64-encoded MIME | raw `users messages send` | blocked — encoded payloads are decoded before the check |
+| B13 | B1 body with `--draft` | gmail `+send --draft` | passes through — drafts never leave the account |
+| B14 | B2 via stdin | messenger `send` via shim | blocked, real binary silent |
+| B15 | B7 via stdin | messenger `send` via shim | allowed, stdin replayed byte-identical |
+| B16 | `drive permissions create` | gws shim | refused (`rc=2`); with approval → allowed — sharing is never a free zone |
+| B17 | `drive files list`, gmail `+triage` | gws shim | pass through — reads and own-Drive ops untouched |
+
+`rc=1` = hard block (secrets, SSNs, cards). `rc=2` = needs the user's
+explicit approval. `rc=0` = clean.
+
+### C. Attack-surface coverage — is every path's control actually in place?
+
+| # | Scenario | Illustration |
+|---|----------|--------------|
+| C1 | Agent manual mandates the shim `PATH` | static grep for the export line in the manual |
+| C2 | Agent manual mandates brief gating | static grep for `brief-gate` in the manual |
+| C3 | Briefing policy exists | `references/subagent-briefing.md` present |
+| C4 | Free-share zones defined | `references/data-protection.md` defines the boundary |
+| C5 | Cron prompts wire the shim `PATH` | every scheduled prompt statically checked |
+| C6 | Memory audit green (opt-in) | `MOCHI_MEMORY_AUDIT=1` runs the memory skill's own audit |
+
+### D. Audit-log review — what has the gate actually decided?
+
+| # | Scenario | Synthetic illustration |
+|---|----------|------------------------|
+| D1 | Blocked attempts visible | log lines ending `\| BLOCKED` listed (synthetic contexts like `leakage-audit:…`) |
+| D2 | Approval overrides surfaced | lines ending `\| approved-override` listed — the highest-risk events, for human review |
+| D3 | Verdict distribution | counts per verdict — proves the gate is exercised, not bypassed |
+
+### E. Known residuals — reported every run, never silent
+
+| # | Scenario | Status |
+|---|----------|--------|
+| E1 | Browser-task sends (separate VM, shims can't reach) | policy-only: brief-level instruction |
+| E2 | Absolute-path shim bypass | policy-only: forbidden by mandate, not technically preventable |
+| E3 | Voice calls | out of text-gate scope: phone tool's own confirmation flow |
+| E4 | Brief gating runs on mandate | no syscall interception for brief text |
+
+## What a real run reports
+
+`bin/leakage-report [--out PATH]` runs the audit and writes a
+mobile-friendly HTML report. Per suite: a one-sentence green/red callout,
+with the full per-check evidence expandable underneath — the real input
+that was fed, the real output the gate returned, and, for every failure,
+the finding plus a concrete suggested remediation. Exits with the audit's
+exit code (0 = CLEAN).
+
+For validation against **real data formats** (not synthetic), the
+installation can additionally run a real-data verification: real
+figures, addresses, and numbers through the real gates, reporting
+verdicts per check. That harness must live outside this repo and never be
+committed — this repo stays synthetic-only, always.
 
 ## Setup
 
@@ -31,18 +106,17 @@ bin/leakage-audit
 ```
 
 Configuration is entirely env-driven (see `local.env.example`) — no
-personal paths are baked into the skill. All test fixtures are synthetic
-and impersonal (`123-45-6789`, `4111-1111-1111-1111`,
-`sk-testfakekey…`); never put real private data in `bin/fixtures/`.
+personal paths are baked into the skill.
 
-Exit 0 = all checks pass. Exit 1 = at least one failure, named in the
-report.
+Exit 0 = all checks pass. Exit 1 = at least one failure, each named with
+its evidence and a suggested remediation.
 
 ## Layout
 
 - `SKILL.md` — skill definition (for the agent).
 - `bin/leakage-audit` — the validation runner.
 - `bin/fixtures/` — synthetic payloads only.
+- `bin/leakage-report` — HTML report generator.
 - `references/attack-surface.md` — enumerated leakage paths and controls.
 - `references/test-matrix.md` — what each check proves.
 - `reports/` — saved audit reports (gitignored).
@@ -53,6 +127,7 @@ report.
 2. Add the control (gate or policy).
 3. Add the test to `bin/leakage-audit` and the expectation to
    `references/test-matrix.md`.
+4. Illustrate the scenario in this README with a synthetic example.
 
-A path with no row is an unexamined path — the failure mode this skill
-exists to prevent.
+A path with no scenario is an unexamined path — the failure mode this
+skill exists to prevent.
