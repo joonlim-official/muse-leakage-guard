@@ -7,8 +7,11 @@ description: "Validate an AI assistant's private-memory leakage protection: enum
 
 A validation skill for private-memory leakage protection. It does not
 protect anything itself — it *proves* the protection works, and finds the
-holes. Run it after any change to the gates, shims, or briefing policy,
-and on a schedule if you want continuous assurance. It is also the
+holes. Every finding carries a concrete suggested remediation. The skill
+never applies fixes itself: remediation belongs to the memory skill (or
+the agent operating it) — this one stays focused on validation. Run it
+after any change to the gates, shims, or briefing policy, and on a
+schedule if you want continuous assurance. It is also the
 leakage-protection step of the memory skill's daily health check.
 
 ## How to run
@@ -73,6 +76,10 @@ summary table to a stacked layout on narrow screens.
 
 ## Design notes
 
+- Scope: validate and suggest, never fix. Each failed check prints a
+  concrete suggested remediation (and the HTML report shows it in the
+  expanded evidence). Applying the fix is the memory skill's — or the
+  operating agent's — job, followed by a re-run of this audit.
 - The gates under test live in the personal-memory-system skill
   (`bin/egress-gate`, `bin/brief-gate`, `bin/shims/`,
   `bin/memory-egress-check`). This skill resolves them via
