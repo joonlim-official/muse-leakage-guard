@@ -8,7 +8,8 @@ description: "Validate an AI assistant's private-memory leakage protection: enum
 A validation skill for private-memory leakage protection. It does not
 protect anything itself — it *proves* the protection works, and finds the
 holes. Run it after any change to the gates, shims, or briefing policy,
-and on a schedule if you want continuous assurance.
+and on a schedule if you want continuous assurance. It is also the
+leakage-protection step of the memory skill's daily health check.
 
 ## What it checks
 
