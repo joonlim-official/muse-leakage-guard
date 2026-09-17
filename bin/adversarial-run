@@ -19,6 +19,17 @@
 # All corpus values are synthetic (shaped to trip detectors, belonging
 # to nobody). Never add real private data here.
 #
+# Machine-readable output: besides the human-readable lines, the runner
+# emits @@@ ADV sentinels on stdout so CI and the report can parse
+# results without scraping prose:
+#   @@@ ADV MATCHED <pass>/<total>
+#   @@@ ADV TIERS block <p1>/<t1> review <p2>/<t2> clean <p0>/<t0>
+#   @@@ ADV MISMATCH <name> want=<w> got=<g>
+# (Sentinels are emitted for the run's own lines only; case names come
+# from the corpus and are never trusted — the report anchors on the
+# leading "@@@ ADV " prefix, which case content cannot forge because
+# the runner, not the corpus, prints it.)
+#
 # Env (same as leakage-audit):
 #   PERSONAL_MEMORY_SKILL   memory skill under test
 #                           (default ~/workspace/skills/personal-memory-system)
@@ -58,11 +69,13 @@ while IFS='|' read -r name want content; do
     fail=$((fail+1)); continue;; esac
   # Same invocation shape as the audit's gate_expect (file argument, no pipe)
   # so the corpus and the audit exercise the gate identically.
+  # timeout -k: a TERM-trapping gate is SIGKILLed so the 10s bound is real.
   printf '%s' "$content" > "$TMPF"
-  got="$(timeout 10 "$GATE" "$TMPF" >/dev/null 2>&1; echo $?)"
+  got="$(timeout -k 5 10 "$GATE" "$TMPF" >/dev/null 2>&1; echo $?)"
   if [ "$got" = 124 ]; then
     fail=$((fail+1))
     failed_cases="${failed_cases}  MISMATCH $name: want rc=$want, got TIMEOUT (gate hung >10s)\n"
+    printf '@@@ ADV MISMATCH %s want=%s got=TIMEOUT\n' "$name" "$want"
     printf '  MISMATCH %-16s want rc=%s got TIMEOUT (gate hung >10s)\n' "$name" "$want" >&2
     continue
   fi
@@ -73,6 +86,7 @@ while IFS='|' read -r name want content; do
     fail=$((fail+1))
     case "$want" in 1) f1=$((f1+1));; 2) f2=$((f2+1));; 0) f0=$((f0+1));; esac
     failed_cases="${failed_cases}  MISMATCH $name: want rc=$want, got rc=$got\n"
+    printf '@@@ ADV MISMATCH %s want=%s got=%s\n' "$name" "$want" "$got"
     printf '  MISMATCH %-16s want rc=%s got rc=%s\n' "$name" "$want" "$got" >&2
   fi
 done < "$CORPUS"
@@ -84,6 +98,8 @@ if [ "$total" -eq 0 ]; then
 fi
 echo "adversarial-run: $pass/$total cases matched expected verdicts."
 echo "adversarial-run: block-tier pass $p1/$((p1+f1)) · review-tier pass $p2/$((p2+f2)) · clean pass $p0/$((p0+f0))"
+printf '@@@ ADV MATCHED %s/%s\n' "$pass" "$total"
+printf '@@@ ADV TIERS block %s/%s review %s/%s clean %s/%s\n' "$p1" "$((p1+f1))" "$p2" "$((p2+f2))" "$p0" "$((p0+f0))"
 if [ "$fail" -gt 0 ]; then
   printf '%b' "$failed_cases" >&2
   echo "Suggestion: tighten the missing pattern in $GATE (or fix the corpus expectation), then re-run." >&2

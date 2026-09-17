@@ -37,14 +37,23 @@ AUD_TMP="$(mktemp)"; ADV_TMP="$(mktemp)"
 trap 'rm -f "$AUD_TMP" "$ADV_TMP"' EXIT
 # Deterministic narrow layout the fallback parser understands; machine
 # sentinels on so the primary parser does not depend on text layout at all.
-MOCHI_REPORT_WIDTH=48 MOCHI_AUDIT_MACHINE=1 "$SKILL_DIR/bin/leakage-audit" > "$AUD_TMP" 2>&1
+# Both invocations are bounded: a hung gate must fail this step in minutes,
+# not hang it until the CI job timeout (report the hang; exit 3 refuses to
+# write HTML from a run that never finished).
+MOCHI_REPORT_WIDTH=48 MOCHI_AUDIT_MACHINE=1 \
+  timeout -k 10 600 "$SKILL_DIR/bin/leakage-audit" > "$AUD_TMP" 2>&1
 RC=$?
+if [ "$RC" -eq 124 ]; then
+  echo "leakage-report: audit timed out after 600s (gate hung); no report generated." >&2
+  exit 3
+fi
 if [ "$RC" -eq 2 ]; then
   echo "leakage-report: audit refused to run (exit 2); no report generated." >&2
   exit 2
 fi
-"$SKILL_DIR/bin/adversarial-run" > "$ADV_TMP" 2>&1
+timeout -k 10 600 "$SKILL_DIR/bin/adversarial-run" > "$ADV_TMP" 2>&1
 ADV_RC=$?
+[ "$ADV_RC" -eq 124 ] && ADV_RC=3  # timed out: runner failed, not "0 mismatches"
 python3 - "$AUD_TMP" "$ADV_TMP" "$SKILL_DIR/bin/adversarial-corpus.txt" "$OUT" "$RC" "$ADV_RC" <<'PYEOF'
 import html, os, re, sys
 aud_src, adv_src, corpus_src, dst, rc, adv_rc = sys.argv[1:5] + [int(sys.argv[5]), int(sys.argv[6])]
@@ -185,16 +194,30 @@ ts = meta.get("TS", "")
 tgt = meta.get("TARGET", "")
 
 # ---- adversarial results ----
+# Primary: @@@ ADV machine sentinels (emitted by adversarial-run). Fallback:
+# the human-readable regexes, for logs predating the sentinels.
 adv_text = open(adv_src, errors="replace").read()
-am = re.search(r"adversarial-run: (\d+)/(\d+) cases matched", adv_text)
-tm = re.search(r"block-tier pass (\d+)/(\d+) \u00b7 review-tier pass (\d+)/(\d+) \u00b7 clean pass (\d+)/(\d+)", adv_text)
-mismatches = re.findall(r"MISMATCH\s+(\S+)\s+want rc=(\d+) got (?:rc=)?(\S+)", adv_text)
 adv = None
-if am:
-    adv = {"matched": int(am.group(1)), "total": int(am.group(2)), "mismatches": mismatches}
-    if tm:
-        g = list(map(int, tm.groups()))
+mismatches = []
+sm = re.search(r"^@@@ ADV MATCHED (\d+)/(\d+)", adv_text, re.M)
+if sm:
+    adv = {"matched": int(sm.group(1)), "total": int(sm.group(2)), "mismatches": []}
+    stm = re.search(r"^@@@ ADV TIERS block (\d+)/(\d+) review (\d+)/(\d+) clean (\d+)/(\d+)",
+                    adv_text, re.M)
+    if stm:
+        g = list(map(int, stm.groups()))
         adv["tiers"] = {"block": (g[0], g[1]), "review": (g[2], g[3]), "clean": (g[4], g[5])}
+    adv["mismatches"] = re.findall(r"^@@@ ADV MISMATCH (\S+) want=(\S+) got=(\S+)", adv_text, re.M)
+    mismatches = adv["mismatches"]
+else:
+    am = re.search(r"adversarial-run: (\d+)/(\d+) cases matched", adv_text)
+    tm = re.search(r"block-tier pass (\d+)/(\d+) \u00b7 review-tier pass (\d+)/(\d+) \u00b7 clean pass (\d+)/(\d+)", adv_text)
+    mismatches = re.findall(r"MISMATCH\s+(\S+)\s+want rc=(\d+) got (?:rc=)?(\S+)", adv_text)
+    if am:
+        adv = {"matched": int(am.group(1)), "total": int(am.group(2)), "mismatches": mismatches}
+        if tm:
+            g = list(map(int, tm.groups()))
+            adv["tiers"] = {"block": (g[0], g[1]), "review": (g[2], g[3]), "clean": (g[4], g[5])}
 
 clean = (verdict_word == "CLEAN" and adv_rc == 0)
 badge_word = verdict_word if verdict_word in ("CLEAN", "ATTENTION") else "INCOMPLETE"

@@ -83,6 +83,30 @@ the block-set builder concatenated corpus cases without separators, so
 greedy shape patterns fused adjacent tokens into hashes that never occur
 at runtime (3 mismatches) — now hashed per line.
 
+## Iteration 6 — CI fails honest
+Theme: the CI workflow tells the truth in both colors — fail-at-the-end
+with rc-file capture, hermetic delegates, sentinel-based summary, and a
+corrected 4-skip pin (the old 2-skip pin meant CI could never be green).
+- Fail-at-the-end: every component step `if: always()` (guarded by both
+  refuse-step outcomes), rc files, final assert-green step owns the job
+  outcome; red runs still produce logs, report, artifact, and a summary
+  naming the red components.
+- Hermetic delegates in `${{ runner.temp }}/delegates` (no sudo, no
+  /usr/local/bin); PATH-lookup smoke test.
+- Adversarial exit code preserved via `PIPESTATUS[0]`; new `@@@ ADV`
+  machine sentinels (MATCHED / TIERS / MISMATCH) parsed by the summary
+  and the report (sentinel-first, regex fallback).
+- Summary rebuilt on anchored `@@@` sentinels: explicit Outcome word
+  (CLEAN/ATTENTION/INCOMPLETE/BLOCKED), per-component table, missing
+  sentinels render "unavailable". Dead `block-tier recall` grep removed.
+- Timeout hardening: `timeout -k` on all gate invocations; report wraps
+  subprocesses in `timeout -k 10 600`; per-step `timeout-minutes`.
+  Fixed the report's `$?`-after-`if !` exit-code capture bug.
+Validation: stub audit 60 passed / 0 failed / 1 skipped (local) and 57 /
+0 / 4 (CI-equivalent fresh HOME); adversarial 36/36; forced-red audit
+→ report rc=1 with file written; forced adversarial mismatch →
+sentinel flows to report ATTENTION; summary ATTENTION on red logs.
+
 ## Iteration 5 — Honest green
 Theme: the report tells the truth about what green means — tri-state
 verdicts, fixture-conformance language, and statistical humility.

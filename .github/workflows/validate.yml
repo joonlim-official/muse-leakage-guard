@@ -14,6 +14,17 @@
 # - Live-fire is refused: the audit exits 2 against stub targets, and this
 #   workflow additionally fails fast if any live-fire variable is present.
 # - No repository secrets are used or needed.
+#
+# Iteration-6 "CI fails honest": this workflow tells the truth in both
+# colors. Every component step runs even when an earlier component is red
+# (fail-at-the-end via `if: always()`), captures its exit code to an rc
+# file, and a final assert-green step owns the job outcome. The two Refuse
+# steps stay fail-fast (no `if:`): they are safety preconditions, and the
+# `always()` steps additionally require both refuse outcomes to be
+# 'success' so a refused run never executes the audit. Every figure in
+# the summary comes from an anchored @@@ machine sentinel, never from
+# prose greps; a missing sentinel is reported as "unavailable", never
+# silently dropped.
 
 name: validate
 
@@ -47,45 +58,69 @@ jobs:
           fetch-depth: 1
 
       - name: Refuse live-fire variables
+        id: refuse-livefire
+        timeout-minutes: 2
         run: |
+          set -euo pipefail
           for v in MOCHI_LIVE_FIRE MOCHI_LIVE_FIRE_NONINTERACTIVE MOCHI_EGRESS_APPROVED; do
             if [ -n "${!v:-}" ]; then
-              echo "validate: refusing to run with $v set in CI" >&2
+              echo "::error::validate: refusing to run with $v set in CI" >&2
               exit 1
             fi
           done
           echo "validate: no live-fire variables present"
 
       - name: Refuse a committed local.env
+        id: refuse-localenv
+        timeout-minutes: 2
         run: |
+          set -euo pipefail
           if [ -e local.env ]; then
-            echo "validate: local.env must never be committed" >&2
+            echo "::error::validate: local.env must never be committed" >&2
             exit 1
           fi
           echo "validate: no local.env present"
 
-      - name: Provision inert delegate CLIs behind the stub shims
+      - name: Provision hermetic delegates
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 2
         run: |
-          # The audit requires a second, distinct executable behind each shim
-          # on PATH (a shim must never be "tested" against itself). These are
-          # inert: they exit 0 and touch nothing. They live OUTSIDE the shim
-          # directory, are unmistakably synthetic, and never send anything.
-          sudo tee /usr/local/bin/hatch_gws_cli > /dev/null <<'EOF'
-          #!/usr/bin/env bash
-          # Inert delegate for CI: stands in for the real CLI behind the stub shim. Never sends.
-          exit 0
-          EOF
-          sudo tee /usr/local/bin/hatch_messenger_cli > /dev/null <<'EOF'
-          #!/usr/bin/env bash
-          # Inert delegate for CI: stands in for the real CLI behind the stub shim. Never sends.
-          exit 0
-          EOF
-          sudo chmod +x /usr/local/bin/hatch_gws_cli /usr/local/bin/hatch_messenger_cli
-          /usr/local/bin/hatch_gws_cli && /usr/local/bin/hatch_messenger_cli
-          echo "validate: inert delegates provisioned"
+          set -euo pipefail
+          # Hermetic: runner-local directory, no sudo, no /usr/local/bin
+          # writes. The audit requires a second, distinct executable behind
+          # each shim on PATH (a shim must never be "tested" against
+          # itself); these are inert (exit 0, touch nothing),
+          # unmistakably synthetic, and never send anything. The audit's
+          # own shim directory is prepended to PATH, so these resolve as
+          # the delegate behind the stub shims.
+          d="${{ runner.temp }}/delegates"
+          mkdir -p "$d" "${{ runner.temp }}/rc"
+          for cli in hatch_gws_cli hatch_messenger_cli; do
+            printf '#!/usr/bin/env bash\n# Inert delegate for CI: stands in for the real CLI behind the stub shim. Never sends.\nexit 0\n' > "$d/$cli"
+            chmod +x "$d/$cli"
+          done
+          echo "$d" >> "$GITHUB_PATH"
+          ls -la "$d"
+
+      - name: Inert-delegate smoke test
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          # PATH lookup (hermetic): the provisioned delegates must resolve
+          # and be inert. No absolute paths outside the runner.
+          command -v hatch_gws_cli
+          command -v hatch_messenger_cli
+          hatch_gws_cli
+          hatch_messenger_cli
+          echo "validate: inert delegates resolve on PATH and exit 0"
 
       - name: Syntax-check every shell script
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 2
         run: |
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
           fail=0
           for f in bin/leakage-audit bin/leakage-report bin/adversarial-run \
                    test/stub-memory-skill/bin/egress-gate \
@@ -98,60 +133,252 @@ jobs:
             if [ ! -f "$f" ]; then echo "missing script: $f" >&2; fail=1;
             elif ! bash -n "$f"; then echo "syntax error: $f" >&2; fail=1; fi
           done
-          exit $fail
+          echo "$fail" > "${{ runner.temp }}/rc/syntax"
+          exit 0
 
       - name: Check the stub block set is current
-        run: test/stub-memory-skill/build/build-blockset.sh --check
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
+          test/stub-memory-skill/build/build-blockset.sh --check
+          echo "$?" > "${{ runner.temp }}/rc/blockset"
+          exit 0
 
       - name: Run the leakage audit against the synthetic stub
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 10
         run: |
-          set -o pipefail
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
+          # Fail-at-the-end: capture the audit's own exit code explicitly
+          # (PIPESTATUS, not pipefail) so a red audit still yields logs and
+          # the report, and the job outcome is decided by the final assert
+          # step — never by an early abort that hides diagnostics.
           export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
-          MOCHI_AUDIT_MACHINE=1 MOCHI_REPORT_WIDTH=48 bin/leakage-audit | tee "${{ runner.temp }}/audit.log"
-        shell: bash
+          MOCHI_AUDIT_MACHINE=1 MOCHI_REPORT_WIDTH=48 \
+            bin/leakage-audit 2>&1 | tee "${{ runner.temp }}/audit.log"
+          echo "${PIPESTATUS[0]}" > "${{ runner.temp }}/rc/audit"
+          exit 0
 
-      - name: Assert the expected skip set (no silent new skips)
+      - name: Assert the pinned CI skip set (no silent new skips)
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 2
         run: |
-          # Stub-target runs are expected to skip exactly:
-          #   1. memory-audit (opt-in; the stub ships no memory-audit binary)
-          #   2. gate-log review (fresh CI log; no sends attempted yet)
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
+          # CI reality (fresh runner, stub skill): exactly 4 skips —
+          #   1. cron prompt dirs not configured
+          #   2. memory-audit run (opt-in; the stub ships no memory-audit binary)
+          #   3. no egress denylist (CI has no denylist file)
+          #   4. gate log not found (fresh CI log; no sends attempted yet)
+          # Pinned from machine sentinels (@@@ CHECK SKIP), never prose.
           # A new skip reason, or a different count, fails the run.
+          if [ ! -f "${{ runner.temp }}/audit.log" ]; then
+            echo "validate: FAIL — audit.log missing (audit did not run)" >&2
+            echo 1 > "${{ runner.temp }}/rc/skip-assert"
+            exit 0
+          fi
           mapfile -t skip_lines < <(grep -a '^@@@ CHECK SKIP' "${{ runner.temp }}/audit.log" || true)
           echo "skip count: ${#skip_lines[@]}"
           printf '%s\n' "${skip_lines[@]}"
-          [ "${#skip_lines[@]}" -eq 2 ] || { echo "validate: expected exactly 2 skips" >&2; exit 1; }
-          printf '%s\n' "${skip_lines[@]}" | grep -q 'memory-audit run' || { echo "validate: missing memory-audit skip" >&2; exit 1; }
-          printf '%s\n' "${skip_lines[@]}" | grep -q 'gate log not found' || { echo "validate: missing gate-log skip" >&2; exit 1; }
-          echo "validate: skip set matches the pinned expectation"
+          fail=0
+          [ "${#skip_lines[@]}" -eq 4 ] || { echo "validate: expected exactly 4 skips" >&2; fail=1; }
+          for reason in 'cron prompt dirs not configured' 'memory-audit run' \
+                        'no egress denylist' 'gate log not found'; do
+            printf '%s\n' "${skip_lines[@]}" | grep -q "$reason" \
+              || { echo "validate: missing skip reason: $reason" >&2; fail=1; }
+          done
+          [ "$fail" -eq 0 ] && echo "validate: skip set matches the pinned expectation"
+          echo "$fail" > "${{ runner.temp }}/rc/skip-assert"
+          exit 0
 
       - name: Run the adversarial suite against the synthetic stub
-        run: bin/adversarial-run | tee "${{ runner.temp }}/adversarial.log"
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 5
+        run: |
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
+          # PIPESTATUS[0] preserves the runner's exit code through tee; a
+          # bare pipe would let a failing suite report a green step.
+          bin/adversarial-run 2>&1 | tee "${{ runner.temp }}/adversarial.log"
+          echo "${PIPESTATUS[0]}" > "${{ runner.temp }}/rc/adversarial"
+          exit 0
 
       - name: Generate the HTML validation report
+        id: report
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 15
         run: |
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
           export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
-          bin/leakage-report --out "${{ runner.temp }}/leakage-validation.html"
-          grep -q 'SYNTHETIC STUB TARGET' "${{ runner.temp }}/leakage-validation.html" \
-            || { echo "validate: report is missing the stub banner" >&2; exit 1; }
-          echo "validate: stub banner present in report"
+          # Exit 1 (findings/mismatches) still writes the report — that is
+          # the point of fail-at-the-end. Only 2/3 (refused/tooling
+          # failure), a missing file, or a missing stub banner is a red
+          # report component.
+          bin/leakage-report --out "${{ runner.temp }}/leakage-validation.html" \
+            2>&1 | tee "${{ runner.temp }}/report.log"
+          rep_rc="${PIPESTATUS[0]}"
+          if [ "$rep_rc" -eq 0 ] || [ "$rep_rc" -eq 1 ]; then
+            if ! grep -q 'SYNTHETIC STUB TARGET' "${{ runner.temp }}/leakage-validation.html" 2>/dev/null; then
+              echo "validate: FAIL — report is missing the stub banner" >&2
+              rep_rc=3
+            fi
+          fi
+          echo "$rep_rc" > "${{ runner.temp }}/rc/report"
+          if [ -f "${{ runner.temp }}/leakage-validation.html" ]; then
+            echo "report_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "report_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
 
       - name: Upload the validation report
-        if: always()
+        id: upload
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success' && steps.report.outputs.report_exists == 'true'
+        timeout-minutes: 2
         uses: actions/upload-artifact@330a01c490805b77b4e53d9d6f71f148c51e1e1a7 # v4.6.2
         with:
           name: leakage-validation-report
           path: ${{ runner.temp }}/leakage-validation.html
           retention-days: 14
+          if-no-files-found: error
 
       - name: Summarize the validation
         if: always()
+        timeout-minutes: 2
         run: |
+          # Informational only: never fails the job. Every figure comes
+          # from an anchored @@@ machine sentinel; a missing sentinel is
+          # reported as "unavailable", never silently dropped.
+          RC_DIR="${{ runner.temp }}/rc"
+          rc() { local f="$RC_DIR/$1"; [ -f "$f" ] && cat "$f" || echo "not-run"; }
+          SYNTAX_RC="$(rc syntax)"; BLOCKSET_RC="$(rc blockset)"
+          AUDIT_RC="$(rc audit)"; SKIP_RC="$(rc skip-assert)"
+          ADV_RC="$(rc adversarial)"; REP_RC="$(rc report)"
+
+          audit_detail="audit figures unavailable — see step log"
+          if [ -f "${{ runner.temp }}/audit.log" ]; then
+            t="$(grep -a '^@@@ TOTAL ' "${{ runner.temp }}/audit.log" | tail -n 1 || true)"
+            v="$(grep -a '^@@@ VERDICT ' "${{ runner.temp }}/audit.log" | tail -n 1 || true)"
+            m="$(grep -a '^@@@ MODE ' "${{ runner.temp }}/audit.log" | tail -n 1 || true)"
+            if [ -n "$t" ] && [ -n "$v" ]; then
+              # shellcheck disable=SC2086
+              set -- $t  # @@@ TOTAL <pass> <fail> <skipped>
+              vv="${v#@@@ VERDICT }"   # "VERDICT: CLEAN — …"
+              vv="${vv#VERDICT: }"      # "CLEAN — …"
+              audit_detail="$3 passed · $4 failed · $5 skipped — $vv"
+              [ -n "$m" ] && audit_detail="$audit_detail (${m#@@@ MODE } mode)"
+            fi
+          fi
+
+          skip_detail="skip figures unavailable — see step log"
+          if [ -f "${{ runner.temp }}/audit.log" ]; then
+            n="$(grep -ac '^@@@ CHECK SKIP ' "${{ runner.temp }}/audit.log" || true)"
+            skip_detail="$n/4 pinned CI skips present"
+          fi
+
+          adv_detail="adversarial figures unavailable — see step log"
+          if [ -f "${{ runner.temp }}/adversarial.log" ]; then
+            a="$(grep -a '^@@@ ADV MATCHED ' "${{ runner.temp }}/adversarial.log" | tail -n 1 || true)"
+            ti="$(grep -a '^@@@ ADV TIERS ' "${{ runner.temp }}/adversarial.log" | tail -n 1 || true)"
+            if [ -n "$a" ]; then
+              adv_detail="${a#@@@ ADV MATCHED } matched"
+              [ -n "$ti" ] && adv_detail="$adv_detail (${ti#@@@ ADV TIERS })"
+            fi
+          fi
+
+          rep_detail="report not generated"
+          if [ "${{ steps.report.outputs.report_exists }}" = "true" ]; then
+            case "$REP_RC" in
+              0) rep_detail="report written (exit 0 — CLEAN)" ;;
+              1) rep_detail="report written (exit 1 — findings/mismatches, see report)" ;;
+              *) rep_detail="report written but runner exit was $REP_RC — treat as suspect" ;;
+            esac
+          fi
+
+          art_detail="artifact not uploaded"
+          [ "${{ steps.upload.outcome }}" = "success" ] && art_detail="artifact uploaded"
+
+          mark() { case "$1" in 0) echo "✅ rc=0";; not-run) echo "⏭️ not run";; *) echo "❌ rc=$1";; esac; }
+
+          # Explicit outcome word, derived from component exit codes.
+          outcome="INCOMPLETE"; outcome_note=""
+          if [ "${{ steps.refuse-livefire.outcome }}" != "success" ] || \
+             [ "${{ steps.refuse-localenv.outcome }}" != "success" ]; then
+            outcome="BLOCKED"; outcome_note=" — safety precondition failed (see Refuse steps); no component ran"
+          else
+            red=""
+            [ "$SYNTAX_RC" != "0" ] && red="$red syntax"
+            [ "$BLOCKSET_RC" != "0" ] && red="$red blockset"
+            [ "$AUDIT_RC" != "0" ] && red="$red audit"
+            [ "$SKIP_RC" != "0" ] && red="$red skip-assert"
+            [ "$ADV_RC" != "0" ] && red="$red adversarial"
+            case "$REP_RC" in 0|1) ;; *) red="$red report";; esac
+            [ "${{ steps.report.outputs.report_exists }}" != "true" ] && red="$red report(missing)"
+            if [ -z "$red" ]; then outcome="CLEAN"; else outcome="ATTENTION"; outcome_note=" — red:$red"; fi
+          fi
+
           {
             echo "## Leakage validation (synthetic stub)"
             echo ""
             echo "_Green here proves harness self-consistency against the bundled test double — not protection of any real installation._"
             echo ""
-            grep -aE 'Total: [0-9]+ passed' "${{ runner.temp }}/audit.log" | sed 's/^/- Audit: /' || true
-            grep -aE 'adversarial-run: [0-9]+/[0-9]+ cases matched' "${{ runner.temp }}/adversarial.log" | sed 's/^/- Adversarial: /' || true
-            grep -aE 'block-tier recall' "${{ runner.temp }}/adversarial.log" | sed 's/^/- /' || true
+            echo "- **Outcome: $outcome**$outcome_note"
+            echo ""
+            echo "All figures below come from anchored \`@@@\` machine sentinels in the step logs."
+            echo ""
+            echo "| Component | Status | Detail |"
+            echo "|---|---|---|"
+            echo "| Syntax check | $(mark "$SYNTAX_RC") | bash -n over audit, report, adversarial runner, blockset builder, stub gates |"
+            echo "| Blockset | $(mark "$BLOCKSET_RC") | build-blockset.sh --check (blockset current) |"
+            echo "| Audit | $(mark "$AUDIT_RC") | $audit_detail |"
+            echo "| Pinned CI skips | $(mark "$SKIP_RC") | $skip_detail |"
+            echo "| Adversarial | $(mark "$ADV_RC") | $adv_detail |"
+            echo "| Report | $(mark "$REP_RC") | $rep_detail |"
+            echo "| Artifact | $art_detail | leakage-validation.html |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Assert green (fail the job if any component is red)
+        if: always()
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          RC_DIR="${{ runner.temp }}/rc"
+          rc() { local f="$RC_DIR/$1"; [ -f "$f" ] && cat "$f" || echo "not-run"; }
+          fail=0
+          # Safety preconditions first: a refused run is a failed run.
+          if [ "${{ steps.refuse-livefire.outcome }}" != "success" ]; then
+            echo "::error::Refuse live-fire variables step did not succeed — job blocked." >&2; fail=1
+          fi
+          if [ "${{ steps.refuse-localenv.outcome }}" != "success" ]; then
+            echo "::error::Refuse committed local.env step did not succeed — job blocked." >&2; fail=1
+          fi
+          check() { # <name> <rc> — 0 required
+            if [ "$2" != "0" ]; then
+              echo "::error::$1 is red (rc=$2) — see the step log and the uploaded report." >&2; fail=1
+            fi
+          }
+          check "syntax check" "$(rc syntax)"
+          check "blockset check" "$(rc blockset)"
+          check "audit" "$(rc audit)"
+          check "skip-set assertion" "$(rc skip-assert)"
+          check "adversarial corpus" "$(rc adversarial)"
+          # Report: exit 1 means findings with a written report (diagnostic;
+          # still red overall via the audit/adversarial rc). Only 2/3 or a
+          # missing file fails this component.
+          rep_rc="$(rc report)"
+          case "$rep_rc" in
+            0|1)
+              if [ "${{ steps.report.outputs.report_exists }}" != "true" ]; then
+                echo "::error::report step exited $rep_rc but no report file exists." >&2; fail=1
+              fi ;;
+            *) echo "::error::report step is red (rc=$rep_rc)." >&2; fail=1 ;;
+          esac
+          if [ "$fail" -ne 0 ]; then
+            echo "ASSERT: one or more components are red — failing the job at the end, after all diagnostics ran." >&2
+            exit 1
+          fi
+          echo "ASSERT: all components green."

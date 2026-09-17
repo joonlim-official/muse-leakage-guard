@@ -3,6 +3,46 @@
 Brief per-iteration notes. Each iteration: all 10 personas review in
 parallel → synthesis → one focused diff → full validation → one commit.
 
+## Iteration 6 — CI fails honest
+
+The CI workflow now tells the truth in both colors — a red run produces
+diagnostics, not silence:
+
+- **Fail-at-the-end.** Every component step runs even when an earlier
+  component is red (`if: always()`), captures its exit code to an rc
+  file, and a final assert-green step owns the job outcome. The two
+  Refuse steps stay fail-fast (no `if:`) and the `always()` steps
+  additionally require both refuse outcomes, so a refused run never
+  executes the audit. A red audit or adversarial mismatch still yields
+  logs, a written report, and an uploaded artifact; the summary names
+  the red components instead of rendering an empty page.
+- **Pinned CI skip set corrected (was: CI could never be green).** The
+  workflow asserted exactly 2 skips; a fresh CI runner always produces
+  4 (cron prompt dirs not configured; memory-audit run; no egress
+  denylist; gate log not found). The pin now expects all 4, asserted
+  from `@@@ CHECK SKIP` machine sentinels with each reason named.
+- **Hermetic delegates.** Provisioned into `${{ runner.temp }}/delegates`
+  via `$GITHUB_PATH` — no `sudo`, no `/usr/local/bin` writes. Smoke
+  test uses a PATH lookup, not absolute paths.
+- **Adversarial step can actually fail.** The runner's exit code is
+  captured via `PIPESTATUS[0]` through `tee` (previously a failing
+  suite could report a green step); `adversarial-run` emits `@@@ ADV
+  MATCHED` / `@@@ ADV TIERS` / `@@@ ADV MISMATCH` machine sentinels.
+- **Sentinel-based summary.** The dead `block-tier recall` grep is gone;
+  every summary figure comes from an anchored `@@@` sentinel (audit
+  TOTAL/VERDICT/MODE, adversarial ADV lines), with an explicit
+  Outcome word (CLEAN / ATTENTION / INCOMPLETE / BLOCKED) and a
+  per-component status table. A missing sentinel renders as
+  "unavailable", never silently dropped.
+- **Timeout hardening.** `timeout -k` on all gate invocations
+  (audit `timeout -k 10 30`, adversarial-run `timeout -k 5 10`); the
+  report bounds its audit/adversarial subprocesses with `timeout -k 10
+  600`; per-step `timeout-minutes` on every workflow step. Also fixed:
+  the report's exit-code capture after `if !` (bash reports the negated
+  status in `$?`; now captured directly).
+- **Report parses adversarial sentinels first**, regex fallback for
+  older logs; mismatch tuples keep their `(name, want, got)` shape.
+
 ## Iteration 5 — honest green
 
 The report now tells the truth about what green means — tri-state

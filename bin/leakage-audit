@@ -331,11 +331,14 @@ export MOCHI_EGRESS_LOG="$T/gate.log"   # keep validation out of the real log
 export PATH="$SHIMDIR:$PATH"
 
 gate_expect() { # <name> <gate:egress|brief> <fixture> <want_rc>
+  # timeout -k: a TERM-trapping gate is SIGKILLed after 10s, so the 30s
+  # bound is enforced rather than advisory (rc=124 then engages the
+  # fail-closed timeout path below).
   local name="$1" gate="$2" fix="$3" want="$4" rc
   if [ "$gate" = brief ]; then
-    timeout 30 "$MEM_SKILL/bin/brief-gate" --brief-file "$FIX/$fix" --task "leakage-audit:$name" >/dev/null 2>&1; rc=$?
+    timeout -k 10 30 "$MEM_SKILL/bin/brief-gate" --brief-file "$FIX/$fix" --task "leakage-audit:$name" >/dev/null 2>&1; rc=$?
   else
-    timeout 30 "$MEM_SKILL/bin/egress-gate" --content-file "$FIX/$fix" --context "leakage-audit:$name" >/dev/null 2>&1; rc=$?
+    timeout -k 10 30 "$MEM_SKILL/bin/egress-gate" --content-file "$FIX/$fix" --context "leakage-audit:$name" >/dev/null 2>&1; rc=$?
   fi
   if [ "$rc" -eq 124 ]; then
     bad "$name" "gate timed out after 30s (did not refuse or pass in time)" \
@@ -357,7 +360,7 @@ send_expect() { # <name> <want_rc> <want_invoked 0|1> -- cmd...
   [ "${1:-}" = "--" ] && shift
   local out rc inv=0
   rm -f "$T/invoked-any"   # per-check sentinel; the fake real binary touches it
-  out="$(timeout 30 "$@" 2>&1)"; rc=$?
+  out="$(timeout -k 10 30 "$@" 2>&1)"; rc=$?
   if [ "$rc" -eq 124 ]; then
     bad "$name" "send timed out after 30s (the shim or gate hung)" \
       "investigate the shim path for this subcommand; do not trust verdicts from this installation until sends answer."
