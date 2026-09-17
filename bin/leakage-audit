@@ -37,8 +37,10 @@ ROWS=""; FINDINGS=""
 ok()   { PASS=$((PASS+1)); printf '  ✓ %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  ✗ %s\n' "$1"
          FINDINGS="${FINDINGS}  ✗ $1"$'\n'
-         if [ -n "${2:-}" ]; then printf '      %s\n' "$2"
-           FINDINGS="${FINDINGS}      $2"$'\n'; fi; }
+         if [ -n "${2:-}" ]; then
+           printf '%s\n' "$2" | sed 's/^/      /'
+           FINDINGS="${FINDINGS}$(printf '%s\n' "$2" | sed 's/^/      /')"$'\n'
+         fi; }
 skip() { SKIPPED=$((SKIPPED+1)); printf '  – %s  [%s]\n' "$1" "$2"; }
 
 begin_suite() { # <letter> <name>
@@ -220,8 +222,8 @@ if [ "${MOCHI_MEMORY_AUDIT:-0}" = "1" ]; then
   audit_out="$("$MEM_SKILL/bin/memory-audit" 2>&1)"; arc=$?
   if [ "$arc" -eq 0 ]; then ok "memory-audit green"
   else
-    bad "memory-audit reported findings (judge public vs private yourself)"
-    printf '%s\n' "$audit_out" | grep -E '^  (/|!)' | head -12 | sed 's/^/      /'
+    detail="$(printf '%s\n' "$audit_out" | grep -E '^  (/|!)' | head -12)"
+    bad "memory-audit reported findings (judge public vs private yourself)" "$detail"
   fi
 else skip "memory-audit run" "set MOCHI_MEMORY_AUDIT=1 to include"; fi
 
