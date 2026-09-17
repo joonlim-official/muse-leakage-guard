@@ -106,8 +106,16 @@ cd muse-leakage-guard
 # Validate the harness against the bundled synthetic stub:
 export PERSONAL_MEMORY_SKILL="$PWD/test/stub-memory-skill"
 export MOCHI_AGENTS_FILE="$PWD/test/stub-memory-skill/AGENTS.md"
-export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
-bin/leakage-audit && bin/adversarial-run   # expect CLEAN and 36/36
+# Inert delegates: stand-ins for the "real" CLIs behind the shims. Blocked
+# sends must never reach them — the audit asserts on that.
+mkdir -p /tmp/leakage-inertbin
+printf '#!/usr/bin/env bash\necho "inert delegate got: $*" >&2\nexit 0\n' > /tmp/leakage-inertbin/hatch_gws_cli
+printf '#!/usr/bin/env bash\necho "inert delegate got: $*" >&2\ncat >/dev/null\nexit 0\n' > /tmp/leakage-inertbin/hatch_messenger_cli
+chmod +x /tmp/leakage-inertbin/hatch_*
+# PATH ordering matters: shims FIRST (they shadow the real CLIs), the inert
+# delegates AFTER (the shims find them via PATH fallback).
+export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:/tmp/leakage-inertbin:$PATH"
+bin/leakage-audit && bin/adversarial-run   # expect CLEAN and every corpus case matched
 ```
 
 To validate **your own installation** instead: `cp local.env.example
@@ -168,7 +176,7 @@ personal paths are baked into the skill:
 | `MOCHI_MEMORY_AUDIT` | set to `1` to include the memory skill's own audit | `0` |
 | `MOCHI_LIVE_FIRE` | set to `1` for live-fire mode (see below); must be set inline in the invoking environment — a value from `local.env` alone is ignored | unset (simulated) |
 | `MOCHI_LIVE_FIRE_NONINTERACTIVE` | set to `1` to allow live-fire without a TTY (CI/automation); without it, non-interactive live-fire is refused | unset (refused) |
-| `MOCHI_TEST_EMAIL` | live-fire email recipient — owner's own address only, verified against the Gmail profile before any send | **required** (no default) |
+| `MOCHI_TEST_EMAIL` | live-fire-only email recipient — owner's own address only, verified against the Gmail profile before any send; ignored in simulated mode | **required** (no default) |
 | `MOCHI_TEST_MESSENGER_CID` | live-fire Messenger target — must resolve to an owner-only chat | auto-discovered |
 
 All test fixtures and corpus payloads are synthetic and impersonal —
@@ -248,3 +256,7 @@ fork should stay in simulated mode.
 
 A path with no scenario is an unexamined path — the failure mode this
 skill exists to prevent.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

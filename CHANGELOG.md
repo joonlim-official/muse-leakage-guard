@@ -3,6 +3,61 @@
 Brief per-iteration notes. Each iteration: all 10 personas review in
 parallel → synthesis → one focused diff → full validation → one commit.
 
+## Iteration 5 — honest green
+
+The report now tells the truth about what green means — tri-state
+verdicts, fixture-conformance language, and statistical humility:
+
+- **Tri-state semantics.** Green = well protected (block-tier, rc=1);
+  yellow = protected through approval (review-tier, rc=2); red = can
+  leak. An explicit legend states this on every report. Tracked
+  residuals use a neutral white treatment (never yellow), stub
+  self-consistency gets its own purple card (never a green protection
+  card), and a suite that ran nothing at all renders severe red
+  (unknown = unprotected until proven otherwise).
+- **Measurement honesty.** "Recall"/"precision" are gone — the
+  adversarial summary and report now say block/review/clean *pass
+  rates*, state plainly that the corpus is author-designed regression
+  fixtures (not a real-world sample, not ML metrics), add a 3×3
+  expected-vs-actual exit-code confusion matrix, and print exact 95%
+  Clopper-Pearson lower bounds per tier (wide intervals at small n:
+  19/19 → ≥0.82, 9/9 → ≥0.66, 8/8 → ≥0.63).
+- **Approval isolation.** Suite B now proves a block-tier payload stays
+  rc=1 even with `MOCHI_EGRESS_APPROVED=1` (gmail + messenger) —
+  approval can only override the review tier, never a block verdict.
+- **Report evidence split.** Suite B evidence is grouped into
+  hard-block, approval-gated, and pass-through sections so the two
+  protection tiers are never mixed in one undifferentiated list.
+- **Stub input hardening.** Newline separators when concatenating
+  fixtures (`memory-egress-check`, `build-blockset.sh`); the stub shim's
+  raw-MIME decode now fails closed (refuses the send) when python3 is
+  missing, the JSON is malformed, or `raw` cannot be decoded — encoded
+  bytes are never gated as if clean.
+- **Fixture-purity SHAPES widened** to the stub's candidate shapes: bare
+  9-digit SSN, bare 16-digit card, 15-digit Amex, and
+  `api_key=`/`password=`/`passwd=` value shapes (new synthetic tokens
+  declared in `SYNTHETIC.txt`).
+- **Known-gap markers.** Suite E now tracks compositional/chunked
+  exfiltration across calls, out-of-band egress (curl, webhooks,
+  unshimmed CLIs — only shimmed send paths are gated), and attachment
+  inspection (B4, still open); new scenario **E3** documents the bare
+  nine-digit SSN false-positive trade-off; A7's cron PATH check is now
+  labeled syntactic/static.
+- **License.** MIT `LICENSE` added, README carries a license section,
+  and `references/attack-surface.md` + `references/test-matrix.md` join
+  `CODEOWNERS`.
+- **Report accessibility.** No heading inside `<button>` (span +
+  `role="heading"`), transcript section with proper h2/details
+  hierarchy, table captions with expected/actual exit-code headers and
+  row headers, decorative glyphs `aria-hidden`, darker muted text,
+  focus-visible transcript summaries, footer outside `<main>`, empty
+  evidence sections and all-zero subtotals suppressed, failing cards
+  auto-expanded, and every finding links to its evidence card.
+- **Contributor UX.** README quickstart gains a copy-paste inert
+  delegate setup with PATH-ordering notes; "36/36" replaced by "every
+  corpus case matched" in general docs; `MOCHI_TEST_EMAIL` clarified as
+  live-fire-only.
+
 ## Iteration 4 — CI readiness + synthetic stub skill
 
 The harness now validates itself in public CI with no private

@@ -83,12 +83,67 @@ the block-set builder concatenated corpus cases without separators, so
 greedy shape patterns fused adjacent tokens into hashes that never occur
 at runtime (3 mismatches) — now hashed per line.
 
-## Backlog (iterations 5–10)
-- Measurement rigor: confusion-matrix framing, KNOWN-GAP markers
+## Iteration 5 — Honest green
+Theme: the report tells the truth about what green means — tri-state
+verdicts, fixture-conformance language, and statistical humility.
+- Tri-state semantics with an explicit legend: green = well protected
+  (block-tier, rc=1), yellow = protected through approval (review-tier,
+  rc=2), red = can leak. Tracked residuals are neutral white (never
+  yellow); stub self-consistency is purple (never a green protection
+  card); a suite that ran nothing renders severe red.
+- "Recall"/"precision" replaced by block/review/clean *pass rates*; the
+  corpus is stated to be author-designed regression fixtures, not a
+  real-world sample; new 3×3 expected-vs-actual exit-code confusion
+  matrix; exact 95% Clopper-Pearson lower bounds per tier (19/19 →
+  ≥0.82, 9/9 → ≥0.66, 8/8 → ≥0.63).
+- Suite B proves approval isolation: block-tier stays rc=1 even with
+  `MOCHI_EGRESS_APPROVED=1` (gmail + messenger); suite B evidence is
+  split into hard-block / approval-gated / pass-through groups.
+- Stub hardening: newline separators when concatenating fixtures
+  (`memory-egress-check`, `build-blockset.sh`); stub shim raw-MIME
+  decode fails closed (refuses the send) when python3 is missing, JSON
+  is malformed, or `raw` is undecodable.
+- Fixture-purity SHAPES widened to the stub's candidate shapes (bare
+  9-digit SSN, bare 16-digit card, 15-digit Amex, `api_key=`/`password=`/
+  `passwd=` values; 8 new synthetic tokens declared).
+- Known gaps: suite E tracks chunked/compositional exfiltration,
+  out-of-band egress (curl/webhooks/unshimmed CLIs — only shimmed paths
+  are gated), and B4 attachments; new scenario E3 (bare 9-digit SSN
+  false-positive trade-off); A7 labeled syntactic/static.
+- MIT LICENSE + README license section; attack-surface/test-matrix join
+  CODEOWNERS; README quickstart gains copy-paste inert delegates with
+  PATH-ordering notes; "36/36" → "every corpus case matched" in general
+  docs; `MOCHI_TEST_EMAIL` clarified as live-fire-only.
+- Report a11y: no heading-in-button, transcript h2/details hierarchy,
+  table captions + expected/actual headers + row headers, aria-hidden
+  glyphs, darker muted text, focus-visible summaries, footer outside
+  `<main>`, empty evidence/all-zero subtotals suppressed, red cards
+  auto-expanded, findings link to evidence cards. Bug found and fixed
+  mid-iteration: the F card rendered red instead of purple on stub
+  targets (synthetic suite has no checks/notes, tripping the new
+  unknown-severe rule) — adv data now counts as card content; plus a
+  red ATTENTION badge (not CLEAN) when the adversarial suite mismatches
+  under a green audit.
+Validation: audit 60 passed / 0 failed / 1 skipped — CLEAN (real target
+and stub target; +2 approval-isolation tests); adversarial 36/36 on both
+targets (block 19/19, review 9/9, clean 8/8); `build-blockset.sh
+--check` current; `bash -n` on all touched scripts; forced-failure run
+verified red report (exit 1, ATTENTION badge, findings with evidence
+links, off-diagonal confusion matrix); desktop + mobile screenshot QA.
+
+## Backlog (iterations 6–10)
+- ~~Measurement rigor: confusion-matrix framing, KNOWN-GAP markers~~ (done, iteration 5)
 - Suite-B fake-binary fidelity and timeout coverage
-- SHAPES manifest expansion
+- ~~SHAPES manifest expansion~~ (done, iteration 5)
 - Adversarial encoding/Unicode/multiline/boundary expansion
-- Accessibility and visual polish
-- Residual-gap documentation
-- Final integration verification (diff through memory-egress-check,
-  push, fresh report)
+- ~~Accessibility and visual polish~~ (substantially done, iteration 5; final polish remains)
+- ~~Residual-gap documentation~~ (done, iteration 5)
+- Interface-version enforcement and contract conformance
+- Machine-readable residual/scenario source of truth
+- Timeout and fake-delegate failure-mode tests
+- Realistic MIME/multipart and subject-line coverage
+- Report transcript secret-shaped-token redaction
+- Independent extractor/blockset ground truth
+- Near-miss negative traps (corpus stays pinned at 36 unless revised)
+- CI status/total assertions and deterministic artifacts
+- Final integration verification (diff through memory-egress-check, push, fresh report)

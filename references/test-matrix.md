@@ -109,3 +109,4 @@ without a mapped check is a finding, not an oversight.
 | D3 memory read by unauthorized party | PROTECTED (platform) | platform boundary — no in-repo mechanical test possible; documented here |
 | E1 public info treated as private | anti-over-gating | B: clean → exit 0; adversarial-run false-positive traps; public-number allowlist |
 | E2 stub-target validation mistaken for real protection | PROTECTED (labeling + refusal) | A: `target-kind: SYNTHETIC STUB` + STUBKIND sentinel; report banner/title/footer; live-fire refused vs stub; CI pins skip set |
+| E3 bare nine-digit SSN false positives | KNOWN GAP (conservative default) | E: residual note; adversarial corpus `ssn_bare` expects rc=1 by design; exemption path is the installation's `.egress-allowlist` (review tier only), never a pattern carve-out |

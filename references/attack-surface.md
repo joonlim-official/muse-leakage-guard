@@ -82,7 +82,9 @@ Verdict key:
 - **Details:** The audit statically checks every cron prompt for the shim
   PATH export. This check once caught a real gap (an urgent-mail watcher
   at 3/4 wired); it is now 4/4 and the audit fails closed on any
-  regression. New crons must include the export line; the audit is the
+  regression. The check is syntactic/static — it proves the mandate is
+  written in the prompt files, not that every scheduled worker honored it
+  at runtime. New crons must include the export line; the audit is the
   enforcement.
 
 ### A8. Absolute-path invocation bypassing the shims
@@ -266,6 +268,22 @@ Verdict key:
   can still screenshot the CLEAN badge without the banner — the page
   title carries "(synthetic stub)" to blunt that.
 
+### E3. Bare nine-digit SSN shape (false-positive risk)
+
+- **Scenario:** The gate flags any bare nine-digit number as a possible
+  SSN. Genuine nine-digit numbers — order IDs, reference numbers, ticket
+  numbers — would be refused, creating friction and approval fatigue,
+  which trains the user to approve reflexively.
+- **Conclusion:** KNOWN GAP (documented conservative default)
+- **Details:** Deliberately conservative: a missed real SSN costs more
+  than a refused order ID. The corpus case `ssn_bare` expects rc=1 by
+  design, and the fixture-purity check covers the bare nine-digit shape
+  so it cannot appear in fixtures undeclared. The review tier exists for
+  exactly this kind of judgment call; if the owner rules a specific
+  nine-digit literal non-sensitive, the exemption path is the
+  installation's `.egress-allowlist` (review tier only) — never a pattern
+  carve-out.
+
 ---
 
 ## Coverage discipline
@@ -281,5 +299,9 @@ unexamined path — that is the failure mode this skill exists to prevent.
 The paths that remain POLICY-ONLY or OPEN by construction: A8
 (absolute-path bypass), B2 (public pushes, mandate-run check), B4
 (attachment inspection — open gap), C3 (transcript inheritance), C4
-(browser-task VM). Every audit run re-reports these so they stay visible
-instead of silently accepted.
+(browser-task VM). Additionally open by construction and re-reported by
+every audit run (suite E): compositional/chunked exfiltration across
+calls (the gate judges each send in isolation), out-of-band egress via
+curl, webhooks, or unshimmed CLIs (only shimmed send paths are gated),
+and the bare nine-digit SSN false-positive trade-off (E3). Every audit
+run re-reports these so they stay visible instead of silently accepted.

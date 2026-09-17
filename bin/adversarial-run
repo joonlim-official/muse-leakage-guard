@@ -3,16 +3,18 @@
 #
 # Runs every payload in bin/adversarial-corpus.txt through the memory
 # skill's memory-egress-check and compares the real verdict against the
-# expected one. This is the precision/recall half of validation:
-# leakage-audit proves the plumbing; this proves the detectors.
+# expected one. This is the fixture-conformance half of validation:
+# leakage-audit proves the plumbing; this proves the detectors agree with
+# the corpus on every author-designed regression case.
 #
 # Also prints per-tier figures the report consumes:
-#   block-tier recall   = block cases refused with rc=1
-#   review-tier recall  = review cases refused without approval (rc=2)
-#   clean precision     = clean cases passed with rc=0
-# (Terminology: "clean precision" is the clean-class pass rate, not the
-# ML precision of the block class. Framed explicitly so the report does not
-# mislabel it.)
+#   block-tier pass rate  = block cases refused with rc=1
+#   review-tier pass rate = review cases refused without approval (rc=2)
+#   clean pass rate       = clean cases passed with rc=0
+# (Terminology: these are pass rates over author-designed regression
+# fixtures, not ML recall/precision — the corpus is a regression set,
+# not a real-world sample. Framed explicitly so the report does not
+# overclaim.)
 #
 # All corpus values are synthetic (shaped to trip detectors, belonging
 # to nobody). Never add real private data here.
@@ -81,7 +83,7 @@ if [ "$total" -eq 0 ]; then
   exit 3
 fi
 echo "adversarial-run: $pass/$total cases matched expected verdicts."
-echo "adversarial-run: block-tier recall $p1/$((p1+f1)) · review-tier recall $p2/$((p2+f2)) · clean precision $p0/$((p0+f0))"
+echo "adversarial-run: block-tier pass $p1/$((p1+f1)) · review-tier pass $p2/$((p2+f2)) · clean pass $p0/$((p0+f0))"
 if [ "$fail" -gt 0 ]; then
   printf '%b' "$failed_cases" >&2
   echo "Suggestion: tighten the missing pattern in $GATE (or fix the corpus expectation), then re-run." >&2

@@ -4,3 +4,5 @@
 bin/ @joonlim-official
 test/stub-memory-skill/ @joonlim-official
 references/gate-interface.md @joonlim-official
+references/attack-surface.md @joonlim-official
+references/test-matrix.md @joonlim-official

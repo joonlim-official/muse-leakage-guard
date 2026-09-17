@@ -34,14 +34,15 @@ while IFS='|' read -r name want content; do
   [ "$want" = "1" ] || continue
   printf '%s\n' "$content"
 done < "$CORPUS" >> "$tmp"
-# 2) stub's own block-tier fixtures
+# 2) stub's own block-tier fixtures (newline-separated: a fixture missing its
+#    trailing newline must not fuse tokens with the next file's first token)
 for f in secret.txt secret2.txt ssn.txt card.txt; do
-  [ -f "$FIXDIR/$f" ] && cat "$FIXDIR/$f" >> "$tmp"
+  [ -f "$FIXDIR/$f" ] && { cat "$FIXDIR/$f"; printf '\n'; } >> "$tmp"
 done
 # 3) the guard's own block-tier fixtures (suite B classifies these through
 #    the target's gates, so the stub must know their exact tokens)
 for f in secret.txt secret2.txt ssn.txt card.txt; do
-  [ -f "$GUARD_DIR/bin/fixtures/$f" ] && cat "$GUARD_DIR/bin/fixtures/$f" >> "$tmp"
+  [ -f "$GUARD_DIR/bin/fixtures/$f" ] && { cat "$GUARD_DIR/bin/fixtures/$f"; printf '\n'; } >> "$tmp"
 done
 
 grep -oE "$STUB_SECRET_CAND" "$tmp" | sort -u | while IFS= read -r tok; do

@@ -29,7 +29,7 @@ export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
 # 3. Run the full loop
 bash -n bin/leakage-audit && bash -n bin/leakage-report && bash -n bin/adversarial-run
 bin/leakage-audit          # expect CLEAN
-bin/adversarial-run        # expect 36/36
+bin/adversarial-run        # expect every corpus case matched
 bin/leakage-report         # writes hidden_files/reports/*.html (gitignored)
 ```
 
@@ -59,7 +59,7 @@ Follow the coverage discipline in `references/attack-surface.md`:
 
 - [ ] `bash -n` on every touched shell script
 - [ ] `bin/leakage-audit` CLEAN against the stub (and your install, if touched)
-- [ ] `bin/adversarial-run` 36/36
+- [ ] `bin/adversarial-run` — every corpus case matched
 - [ ] `test/stub-memory-skill/build/build-blockset.sh --check` passes
       (if you touched the corpus or stub fixtures)
 - [ ] New fixtures declared in `bin/fixtures/SYNTHETIC.txt`

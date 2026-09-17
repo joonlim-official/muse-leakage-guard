@@ -98,25 +98,31 @@ if [ "${1:-}" = "gmail" ]; then
         done
         tmp="$(mktemp)"
         if [ -n "$payload" ]; then
+          # Fail closed: if the payload cannot be decoded, the send is
+          # refused — encoded bytes are never gated as if they were clean.
+          if ! command -v python3 >/dev/null 2>&1; then
+            rm -f "$tmp"
+            echo "stub-shim: python3 missing — cannot decode raw MIME; refusing users messages send (fail closed)." >&2
+            exit 1
+          fi
           if ! python3 - "$payload" > "$tmp" 2>/dev/null <<'PYEOF'
 import sys, json, base64
 p = sys.argv[1]
-try:
-    d = json.loads(p)
-except Exception:
-    sys.stdout.write(p); sys.exit(0)
+d = json.loads(p)  # malformed JSON -> nonzero exit -> refused below
 raw = d.get("raw") or ""
-if raw:
-    pad = "=" * (-len(raw) % 4)
-    try:
-        sys.stdout.write(base64.urlsafe_b64decode(raw + pad).decode("utf-8", "replace"))
-    except Exception:
-        sys.stdout.write(p)
-else:
+if not raw:
+    # No raw field: nothing is encoded, so gating the JSON as-is is sound.
     sys.stdout.write(p)
+else:
+    # Undecodable raw -> nonzero exit -> refused below. Never fall back to
+    # gating the encoded bytes as if they were clean.
+    pad = "=" * (-len(raw) % 4)
+    sys.stdout.write(base64.urlsafe_b64decode(raw + pad).decode("utf-8", "replace"))
 PYEOF
           then
-            printf '%s' "$payload" > "$tmp"
+            rm -f "$tmp"
+            echo "stub-shim: raw MIME payload is not decodable (malformed JSON or bad base64); refusing users messages send (fail closed)." >&2
+            exit 1
           fi
         else
           printf '(no payload captured)' > "$tmp"

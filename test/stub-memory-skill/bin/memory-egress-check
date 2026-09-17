@@ -33,7 +33,10 @@ die() { echo "memory-egress-check(stub): $*" >&2; exit 2; }
 
 INPUT="$(mktemp)"; trap 'rm -f "$INPUT"' EXIT
 if [ $# -gt 0 ]; then
-  for f in "$@"; do [ -f "$f" ] || die "not a file: $f"; cat "$f" >> "$INPUT"; done
+  # Newline separator between files: without it, a fixture missing its
+  # trailing newline would fuse its last token with the next file's first
+  # token, creating phantom tokens (or hiding real ones at the boundary).
+  for f in "$@"; do [ -f "$f" ] || die "not a file: $f"; { cat "$f"; printf '\n'; } >> "$INPUT"; done
 else
   cat > "$INPUT"
 fi

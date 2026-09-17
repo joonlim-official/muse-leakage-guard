@@ -187,7 +187,7 @@ tgt = meta.get("TARGET", "")
 # ---- adversarial results ----
 adv_text = open(adv_src, errors="replace").read()
 am = re.search(r"adversarial-run: (\d+)/(\d+) cases matched", adv_text)
-tm = re.search(r"block-tier recall (\d+)/(\d+) \u00b7 review-tier recall (\d+)/(\d+) \u00b7 clean precision (\d+)/(\d+)", adv_text)
+tm = re.search(r"block-tier pass (\d+)/(\d+) \u00b7 review-tier pass (\d+)/(\d+) \u00b7 clean pass (\d+)/(\d+)", adv_text)
 mismatches = re.findall(r"MISMATCH\s+(\S+)\s+want rc=(\d+) got (?:rc=)?(\S+)", adv_text)
 adv = None
 if am:
@@ -198,10 +198,23 @@ if am:
 
 clean = (verdict_word == "CLEAN" and adv_rc == 0)
 badge_word = verdict_word if verdict_word in ("CLEAN", "ATTENTION") else "INCOMPLETE"
+if adv_rc != 0 and badge_word == "CLEAN":
+    # The audit was green but the adversarial suite mismatched: the badge
+    # must not say CLEAN. ATTENTION, with the red F card auto-expanded.
+    badge_word = "ATTENTION"
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 def scrub(s):
     return EMAIL_RE.sub("[redacted]", s)
+
+def ci_lower_95(k, n):
+    # Exact two-sided 95% Clopper-Pearson lower bound for the perfect k==n
+    # case: (alpha/2)^(1/n). Tiers that are imperfect or empty get no number —
+    # a made-up interval is worse than none. Small-n fixture sets have wide
+    # intervals even at full pass rates; the report states them plainly.
+    if n > 0 and k == n:
+        return 0.025 ** (1.0 / n)
+    return None
 
 def scrub_transcript(s):
     # Raw transcripts can expose local contexts/paths (suite evidence is
@@ -221,16 +234,23 @@ def callout(s):
         mm, tt = adv["matched"], adv["total"]
         if mm == tt:
             if stub:
-                return (f"\U0001F535 Stub consistency: {mm}/{tt} corpus cases matched expected verdicts "
+                return (f"\U0001F7E3 Stub consistency: {mm}/{tt} corpus cases matched expected verdicts "
                         "against the synthetic test double \u2014 harness self-check, not detector validation.")
             return f"\U0001F7E2 Detection performance: {mm}/{tt} corpus cases matched expected verdicts."
         return f"\U0001F534 Detection performance: {tt - mm} of {tt} corpus cases mismatched."
     if f:
         return f"\U0001F534 {n}: {f} of {p + f + sk} failed — red, needs attention."
     if "residual" in s["name"].lower():
-        return f"\U0001F7E1 {n}: {len(s['notes'])} known paths reported and tracked — none silent."
+        # Tracked residuals are NOT a protection claim: neutral treatment.
+        # Yellow is reserved for approval-gated (protected through approval).
+        return (f"\u26AA {n}: {len(s['notes'])} known paths reported and tracked — none silent "
+                "(tracked residual, not a protection claim).")
     if p == 0 and f == 0 and sk == 0:
-        return f"\u26AA {n}: no checks ran — treat as unknown."
+        if s["notes"] or s["ctx"]:
+            return f"\u26AA {n}: no checks ran — tracked notes only, not a protection claim."
+        # A suite that ran nothing is UNKNOWN — and unknown looks severe,
+        # never calm. Treat as unprotected until proven otherwise.
+        return f"\U0001F534 {n}: no checks ran — UNKNOWN. Treat as unprotected until proven otherwise."
     if p == 0 and sk:
         why = s["checks"][0]["text"] if s["checks"] else "not run"
         why = re.sub(r"\[.*?\]", "", why).strip()
@@ -269,51 +289,101 @@ def tested_blurb(s):
             return "Adversarial runner did not produce figures — see the raw transcript."
         b, r, c = adv["tiers"]["block"], adv["tiers"]["review"], adv["tiers"]["clean"]
         blurb = (f"{adv['matched']}/{adv['total']} corpus cases matched expected verdicts "
-                f"(block-tier recall {b[0]}/{b[1]}, review-tier recall {r[0]}/{r[1]}, clean precision {c[0]}/{c[1]}). "
-                f"Detector check — no sends in either mode.")
+                f"(block-tier pass {b[0]}/{b[1]}, review-tier pass {r[0]}/{r[1]}, clean pass {c[0]}/{c[1]}). "
+                f"These are pass rates over author-designed regression fixtures — not a real-world sample, "
+                f"and not ML recall/precision. Detector check — no sends in either mode.")
         if stub:
             blurb = ("Stub target \u2014 " + blurb.replace("Detector check", "harness self-consistency check against the test double")
                      + " This figure measures the harness against the stub, not real detector quality.")
         return blurb
     return f"{total_n} checks ({p} passed, {f} failed, {sk} skipped)."
 
-# findings: failed checks + adversarial mismatches, auto-expanded
+# findings: failed checks + adversarial mismatches, auto-expanded.
+# Each finding carries its suite letter so the report can link it to the
+# failed evidence card.
 findings = []
 for s in suites:
     for c in s["checks"]:
         if c["st"] == "\u2717":
             ev = scrub(c["ev"][0]) if c["ev"] else ""
-            findings.append((f"[{s['letter']}] {scrub(c['text'])}", ev))
+            findings.append((f"[{s['letter']}] {scrub(c['text'])}", ev, s["letter"]))
 for name, want, got in mismatches:
-    findings.append((f"[F] adversarial mismatch {name}: want rc={want}, got rc={got}", ""))
+    findings.append((f"[F] adversarial mismatch {name}: want rc={want}, got rc={got}", "", "F"))
 
 cards = []
+def ev_item(c):
+    st = c["st"]
+    cls = "pass" if st == chr(0x2713) else ("skip" if st == chr(0x2013) else "fail")
+    word = "Pass" if st == chr(0x2713) else ("Skipped" if st == chr(0x2013) else "Fail")
+    return (f'<li class="{cls}">'
+            f'<span class="mark" aria-hidden="true">{st}</span>'
+            f'<span class="vh">{word}: </span>'
+            f'<span>{html.escape(scrub(c["text"]))}'
+            + (f'<br><span class="cev">{html.escape(scrub(c["ev"][0]))}</span>' if c["ev"] else "")
+            + "</span></li>")
+
+def ev_list(checks):
+    return "".join(ev_item(c) for c in checks)
+
+def tri_state_groups(checks):
+    # Suite B only: split evidence into hard-block (rc=1), approval-gated
+    # (rc=2), and pass-through (rc=0) so the report never mixes the two
+    # protection tiers in one undifferentiated list.
+    block, gated, passthru, other = [], [], [], []
+    for c in checks:
+        m = re.search(r"rc=(\d)", c["text"])
+        rc = m.group(1) if m else None
+        if rc == "1":
+            block.append(c)
+        elif rc == "2":
+            gated.append(c)
+        elif rc == "0":
+            passthru.append(c)
+        else:
+            other.append(c)
+    return [("Hard-block evidence \u2014 refused outright (rc=1)", block),
+            ("Approval-gated evidence \u2014 refused without explicit approval (rc=2)", gated),
+            ("Pass-through evidence \u2014 allowed (rc=0)", passthru),
+            ("Other evidence", other)]
+
 def render_card(s, extra=""):
     p, f, sk = s["sub"]
-    cls = "red" if (f or s["letter"] == "F" and adv is None) else ("ok" if p else "skip")
-    if s["letter"] == "F" and adv is not None and adv["matched"] != adv["total"]:
+    # Unknown (a suite that ran nothing at all) looks severe, never calm.
+    # The stub's self-consistency card gets its own neutral purple — never
+    # a green protection card. (The F card carries its content in `extra`,
+    # so adv data counts as content for the emptiness test.)
+    has_content = s["checks"] or s["notes"] or s["ctx"] or (s["letter"] == "F" and adv is not None)
+    if f or (s["letter"] == "F" and adv is None) or not has_content:
         cls = "red"
-    items = "".join(
-        f'<li class="{("pass" if c["st"] == chr(0x2713) else ("skip" if c["st"] == chr(0x2013) else "fail"))}">'
-        f'<span class="mark" aria-hidden="true">{c["st"]}</span>'
-        f'<span class="vh">{("Pass" if c["st"] == chr(0x2713) else ("Skipped" if c["st"] == chr(0x2013) else "Fail"))}: </span>'
-        f'<span>{html.escape(scrub(c["text"]))}'
-        + (f'<br><span class="cev">{html.escape(scrub(c["ev"][0]))}</span>' if c["ev"] else "")
-        + "</span></li>"
-        for c in s["checks"])
-    notes = "".join(f"<li>{html.escape(scrub(n))}</li>" for n in s["notes"])
-    ctx = "".join(f"<li>{html.escape(scrub(c))}</li>" for c in s["ctx"])
-    n_items = len(s["checks"]) or len(s["notes"]) or len(s["ctx"])
-    ev_word = "item" if n_items == 1 else "items"
+    elif s["letter"] == "F" and stub and adv is not None:
+        cls = "stub"
+    elif p:
+        cls = "ok"
+    else:
+        cls = "skip"
     co = callout(s)
     emoji, rest = co.split(" ", 1)
     lid = f"callout-{s['letter']}"
+    subtotal = (f'<span class="subtotal">{p} passed \u00b7 {f} failed \u00b7 {sk} skipped</span>'
+                if (p + f + sk) else "")
+    ctx = "".join(f"<li>{html.escape(scrub(c))}</li>" for c in s["ctx"])
+    if s["letter"] == "B" and s["checks"]:
+        ev_html = "".join(
+            f'<h3 class="ev-label">{html.escape(label)}</h3><ul class="evidence">{ev_list(g)}</ul>'
+            for label, g in tri_state_groups(s["checks"]) if g)
+    else:
+        items = ev_list(s["checks"])
+        notes = "".join(f"<li>{html.escape(scrub(n))}</li>" for n in s["notes"])
+        n_items = len(s["checks"]) or len(s["notes"]) or len(s["ctx"])
+        ev_html = (f'<h3 class="ev-label">Full evidence ({n_items} '
+                   f'{"item" if n_items == 1 else "items"})</h3>'
+                   f'<ul class="evidence">{items or notes or ctx}</ul>') if n_items else ""
     cards.append(f"""
-    <section class="card {cls}" aria-labelledby="{lid}">
+    <section class="card {cls}" id="card-{s['letter']}" aria-labelledby="{lid}">
       <button class="card-head" aria-expanded="false" aria-controls="detail-{s['letter']}">
         <span class="head-text">
-          <h2 class="callout" id="{lid}"><span aria-hidden="true">{emoji}</span> {html.escape(rest)}</h2>
-          <span class="subtotal">{p} passed \u00b7 {f} failed \u00b7 {sk} skipped</span>
+          <span class="callout" id="{lid}" role="heading" aria-level="2"><span aria-hidden="true">{emoji}</span> {html.escape(rest)}</span>
+          {subtotal}
         </span>
         <span class="chev" aria-hidden="true">\u25b8</span>
       </button>
@@ -321,8 +391,7 @@ def render_card(s, extra=""):
         <p class="tested">{html.escape(tested_blurb(s))}</p>
         {('<p class="ops-label">Operational notes</p><ul class="notes">' + ctx + "</ul>") if ctx and s["letter"] != "D" else ""}
         {extra}
-        <h3 class="ev-label">Full evidence ({n_items} {ev_word})</h3>
-        <ul class="evidence">{items or notes or ctx}</ul>
+        {ev_html}
       </div>
     </section>""")
 
@@ -336,6 +405,7 @@ fsuite = {"letter": "F", "name": "Detection performance (adversarial corpus)", "
 cases_html = ""
 if adv:
     rows = []
+    cases = []  # (name, want, got) — feeds the confusion matrix below
     for ln in open(corpus_src, errors="replace").read().splitlines():
         ln = ln.strip()
         if not ln or ln.startswith("#"):
@@ -347,17 +417,56 @@ if adv:
         mm = next((m for m in mismatches if m[0] == name), None)
         got = mm[2] if mm else want
         okc = got == want
-        rows.append(f'<tr><td>{html.escape(name)}</td><td>rc={html.escape(want)}</td>'
+        cases.append((name, want, got))
+        mark = "\u2713" if okc else "\u2717"
+        rows.append(f'<tr><th scope="row">{html.escape(name)}</th><td>rc={html.escape(want)}</td>'
                     f'<td>rc={html.escape(got)}</td>'
-                    f'<td class="{"cok" if okc else "cbad"}">{"\u2713" if okc else "✗"}'
+                    f'<td class="{"cok" if okc else "cbad"}"><span aria-hidden="true">{mark}</span>'
                     f'<span class="vh">{"matched" if okc else "mismatched"}</span></td></tr>')
     tier_line = ""
+    ci_line = ""
     if "tiers" in adv:
         b, r, c = adv["tiers"]["block"], adv["tiers"]["review"], adv["tiers"]["clean"]
-        tier_line = (f'<p class="tiers">block-tier recall {b[0]}/{b[1]} \u00b7 review-tier recall {r[0]}/{r[1]} '
-                     f'\u00b7 clean precision {c[0]}/{c[1]}</p>')
-    cases_html = (tier_line + '<div class="tablewrap"><table class="cases"><thead><tr>'
-                  '<th scope="col">case</th><th scope="col">want</th><th scope="col">got</th>'
+        tier_line = (f'<p class="tiers">block-tier pass {b[0]}/{b[1]} \u00b7 review-tier pass {r[0]}/{r[1]} '
+                     f'\u00b7 clean pass {c[0]}/{c[1]}</p>')
+        # Exact 95% CI context: small-n fixture sets have wide intervals even
+        # at full pass rates. Stated plainly so a 19/19 is never read as
+        # "certain".
+        ci_bits = []
+        for label, (k, n) in (("block-tier", b), ("review-tier", r), ("clean", c)):
+            lb = ci_lower_95(k, n)
+            ci_bits.append(f"{label} \u2265 {lb:.2f} ({k}/{n})" if lb is not None
+                           else f"{label}: interval not computed ({k}/{n})")
+        ci_line = ('<p class="tiers ci">Exact 95% CI lower bounds (Clopper-Pearson): '
+                   + " \u00b7 ".join(ci_bits) + ".</p>")
+    # 3x3 expected-vs-actual exit-code confusion matrix.
+    order = ["1", "2", "0"]
+    wnames = {"1": "block-tier (want rc=1)", "2": "review-tier (want rc=2)", "0": "clean (want rc=0)"}
+    gnames = {"1": "got rc=1", "2": "got rc=2", "0": "got rc=0"}
+    matrix = {(w, g): 0 for w in order for g in order}
+    nonstd = [f"{n} (want rc={w}, got {g})" for n, w, g in cases
+              if w not in order or g not in order]
+    for n, w, g in cases:
+        if w in order and g in order:
+            matrix[(w, g)] += 1
+    mrows = "".join(
+        f'<tr><th scope="row">{html.escape(wnames[w])}</th>'
+        + "".join(f"<td>{matrix[(w, g)]}</td>" for g in order) + "</tr>"
+        for w in order)
+    matrix_html = ('<div class="tablewrap"><table class="cases matrix">'
+                   '<caption>Expected vs actual exit code (3\u00d73)</caption>'
+                   '<thead><tr><th scope="col">expected \\ actual</th>'
+                   + "".join(f"<th scope=\"col\">{html.escape(gnames[g])}</th>" for g in order)
+                   + "</tr></thead><tbody>" + mrows + "</tbody></table></div>")
+    if nonstd:
+        matrix_html += ('<p class="tiers">Non-standard verdicts (outside rc 1/2/0): '
+                        + html.escape("; ".join(nonstd)) + ".</p>")
+    fixture_note = (f'<p class="tiers">The corpus is {adv["total"]} author-designed regression fixtures \u2014 '
+                    'not a real-world sample. These pass rates measure fixture conformance, '
+                    'not detector quality in the wild.</p>')
+    cases_html = (tier_line + ci_line + fixture_note + matrix_html
+                  + '<div class="tablewrap"><table class="cases"><caption>Per-case want vs got</caption><thead><tr>'
+                  '<th scope="col">case</th><th scope="col">expected exit code</th><th scope="col">actual exit code</th>'
                   '<th scope="col">match</th></tr></thead><tbody>'
                   + "".join(rows) + "</tbody></table></div>")
 render_card(fsuite, extra=cases_html)
@@ -369,19 +478,42 @@ modebar = {
 }[mode]
 stubbar = ""
 if stub:
-    stubbar = ('<div class="modebar stub"><strong>SYNTHETIC STUB TARGET</strong> \u2014 harness self-test '
+    stub_score = f"{adv['matched']}/{adv['total']}" if adv else "the corpus score"
+    stubbar = (f'<div class="modebar stub"><strong>SYNTHETIC STUB TARGET</strong> \u2014 harness self-test '
                'against the bundled test double; not a validation of any real installation. '
-               'A 36/36 here proves harness self-consistency, not detector quality.</div>')
+               f'A {stub_score} here proves harness self-consistency, not detector quality.</div>')
 
 findings_html = ""
 if findings:
     rows = "".join(
-        f'<li><strong>{html.escape(t)}</strong>' + (f'<br><span class="fev">{html.escape(e)}</span>' if e else "") + "</li>"
-        for t, e in findings)
+        f'<li><strong>{html.escape(t)}</strong> '
+        f'<a class="flink" href="#card-{html.escape(l)}">evidence \u2192</a>'
+        + (f'<br><span class="fev">{html.escape(e)}</span>' if e else "") + "</li>"
+        for t, e, l in findings)
     findings_html = f"""
 <section class="findings" aria-labelledby="findings-h">
   <h2 id="findings-h">Findings ({len(findings)})</h2>
   <ul>{rows}</ul>
+</section>"""
+
+# Tri-state verdict legend: green = well protected (block-tier), yellow =
+# protected through approval (review-tier), red = can leak. Purple marks
+# stub self-consistency (never a protection claim); white marks tracked
+# residuals (never silent, never a protection claim either).
+legend_html = """
+<section class="legend" aria-label="Verdict legend">
+  <span><span aria-hidden="true">\U0001F7E2</span> <strong>well protected</strong> \u2014 block-tier: refused outright (rc=1)</span>
+  <span><span aria-hidden="true">\U0001F7E1</span> <strong>protected through approval</strong> \u2014 review-tier: refused without explicit approval (rc=2)</span>
+  <span><span aria-hidden="true">\U0001F534</span> <strong>can leak</strong> \u2014 a check failed, or something that should have been stopped was not</span>
+  <span><span aria-hidden="true">\U0001F7E3</span> <strong>stub self-consistency</strong> \u2014 harness check against the synthetic test double, not a protection claim</span>
+  <span><span aria-hidden="true">\u26AA</span> <strong>tracked residual</strong> \u2014 known gap, reported openly, never silent</span>
+</section>"""
+
+transcript_html = f"""
+<section class="transcript" aria-labelledby="transcript-h">
+  <h2 id="transcript-h">Raw transcripts</h2>
+  <details><summary>bin/leakage-audit</summary><pre>{html.escape(scrub_transcript(text))}</pre></details>
+  <details><summary>bin/adversarial-run</summary><pre>{html.escape(scrub_transcript(adv_text))}</pre></details>
 </section>"""
 
 # CI provenance (present only when generated inside GitHub Actions)
@@ -406,7 +538,7 @@ page = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Leakage validation \u2014 {badge_word}{" (synthetic stub)" if stub else ""}</title>
 <style>
-:root{{--bg:#f6f7f9;--fg:#1c1e21;--card:#fff;--mut:#6b7280;--ok:#15803d;--bad:#b91c1c;
+:root{{--bg:#f6f7f9;--fg:#1c1e21;--card:#fff;--mut:#565d66;--ok:#15803d;--bad:#b91c1c;
 --line:#e5e7eb;--hero1:#0f172a;--hero2:#1e3a5f}}
 @media(prefers-color-scheme:dark){{:root{{--bg:#0b0d10;--fg:#e8eaed;--card:#15181d;
 --mut:#9aa0a6;--ok:#4ade80;--bad:#f87171;--line:#2a2e35;--hero1:#020617;--hero2:#0c1a33}}}}
@@ -430,6 +562,11 @@ letter-spacing:.08em;font-size:.85rem}}
 .card{{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--mut);
 border-radius:12px;padding:0;margin:12px 0}}
 .card.ok{{border-left-color:var(--ok)}}.card.red{{border-left-color:var(--bad)}}
+.card.stub{{border-left-color:#7c3aed}}
+@media(prefers-color-scheme:dark){{.card.stub{{border-left-color:#a78bfa}}}}
+.legend{{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 20px;font-size:.78rem;
+background:var(--card);border-bottom:1px solid var(--line)}}
+.legend strong{{font-weight:700}}
 .card-head{{font:inherit;color:inherit;background:none;border:0;width:100%;text-align:left;
 padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;
 -webkit-tap-highlight-color:transparent;border-radius:12px}}
@@ -452,10 +589,12 @@ padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;
 .findings h2{{margin:0 0 8px;font-size:1rem;color:var(--bad)}}
 .findings ul{{list-style:none;margin:0;padding:0;font-size:.85rem}}
 .findings li{{padding:6px 0;border-top:1px dashed var(--line)}}
+.flink{{font-size:.78rem;font-weight:600;white-space:nowrap}}
 .fev{{color:var(--mut);font-size:.8rem}}
 .tiers{{font-size:.85rem;margin:0 0 8px}}
 .tablewrap{{overflow-x:auto}}
 table.cases{{border-collapse:collapse;width:100%;font-size:.8rem;margin:4px 0 8px}}
+table.cases caption{{text-align:left;font-weight:600;font-size:.82rem;padding:6px 0 2px}}
 table.cases th,table.cases td{{border:1px solid var(--line);padding:4px 8px;text-align:left}}
 .cok{{color:var(--ok);font-weight:700}}.cbad{{color:var(--bad);font-weight:700}}
 .vh{{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}}
@@ -464,8 +603,10 @@ table.cases th,table.cases td{{border:1px solid var(--line);padding:4px 8px;text
 .modebar.stub{{background:#2e1065;color:#ddd6fe}}}}
 .transcript{{background:var(--card);border:1px solid var(--line);border-radius:12px;
 padding:14px 16px;margin:16px 0;font-size:.8rem}}
+.transcript h2{{font-size:1rem;margin:0 0 8px}}
+.transcript details{{margin:8px 0}}
 .transcript summary{{cursor:pointer;font-weight:600}}
-.transcript h3{{font-size:.85rem;margin:12px 0 4px}}
+.transcript summary:focus-visible{{outline:2px solid var(--ok);outline-offset:2px}}
 .transcript pre{{white-space:pre-wrap;word-break:break-word;background:var(--bg);
 border:1px solid var(--line);border-radius:8px;padding:10px;max-height:320px;overflow:auto;font-size:.75rem}}
 .total{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
@@ -481,18 +622,27 @@ footer{{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}}
 </header>
 <div class="modebar {modebar[0]}">{modebar[1]}</div>
 {stubbar}
+{legend_html}
 <main class="wrap">
 {findings_html}
 {"".join(cards)}
 <div class="total"><b>Total: {total[0]} passed \u00b7 {total[1]} failed \u00b7 {total[2]} skipped</b>
 <p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">AUDIT VERDICT: {verdict_word}{" \u00b7 adversarial: " + str(adv["matched"]) + "/" + str(adv["total"]) + " matched" if adv else " \u00b7 adversarial: runner failed"}</p></div>
-<details class="transcript"><summary>Raw transcripts</summary>
-<h3>bin/leakage-audit</h3><pre>{html.escape(scrub_transcript(text))}</pre>
-<h3>bin/adversarial-run</h3><pre>{html.escape(scrub_transcript(adv_text))}</pre>
-</details>
-<footer>{html.escape(footer_text)}</footer>
+{transcript_html}
 </main>
+<footer>{html.escape(footer_text)}</footer>
 <script>
+// Auto-expand failing cards: red means "can leak" — the reader should see
+// the evidence without an extra tap. Findings link back to these cards.
+document.querySelectorAll('.card.red').forEach(function(card){{
+  var detail = card.querySelector('.detail');
+  var head = card.querySelector('.card-head');
+  if (detail && detail.hasAttribute('hidden')) {{
+    detail.removeAttribute('hidden');
+    card.classList.add('open');
+    head.setAttribute('aria-expanded', 'true');
+  }}
+}});
 document.querySelectorAll('.card-head').forEach(function(head){{
   head.addEventListener('click', function(){{
     var card = head.closest('.card');

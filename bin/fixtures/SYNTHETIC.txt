@@ -23,3 +23,15 @@ xoxb-12345-67890-AbCdEfGhIjKlMnOpQrStUvWx
 sk-abcdefghijklmnopqrstuvwxyz1234567890ABCD
 sk-testfakekey1234567890abcdefgh
 gsk_f4k3gr0qk3yf0rt3st1ng0nly000000
+
+# Added 2026-09-17 (iteration 5): fixture-purity SHAPES widened to the stub's
+# candidate shapes — bare 9-digit SSN, bare 16-digit card, 15-digit Amex, and
+# api_key / password / passwd value shapes. All synthetic, belonging to nobody.
+123456789
+378282246310005
+4111111111111111
+api key : ZYXWabcdefghij1234567890
+api_key: sk-testfakekey1234567890abcdefgh
+api_key=abcdefghij1234567890abcdef
+passwd=SuperSecret123!@#
+password: hunter2hunter2
