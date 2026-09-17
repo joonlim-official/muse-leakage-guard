@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# leakage-report — run the leakage audit and write a mobile-friendly HTML
+# outcome report with a one-sentence green/red callout per suite.
+# Usage: bin/leakage-report [--out PATH]
+# Exits with the audit's exit code (0 = CLEAN).
+set -u
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) OUT="$2"; shift 2 ;;
+    *) echo "usage: bin/leakage-report [--out PATH]" >&2; exit 2 ;;
+  esac
+done
+if [ -z "$OUT" ]; then
+  mkdir -p "$SKILL_DIR/hidden_files/reports"
+  OUT="$SKILL_DIR/hidden_files/reports/leakage-validation-$(date +%Y%m%d-%H%M).html"
+fi
+TMP="$(mktemp)"
+COLUMNS=76 "$SKILL_DIR/bin/leakage-audit" > "$TMP" 2>&1
+RC=$?
+python3 - "$TMP" "$OUT" <<'PYEOF'
+import html, re, sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src).read()
+lines = text.splitlines()
+suites, cur = [], None
+for ln in lines:
+    m = re.match(r"^    ([A-E])\. (.+)$", ln)
+    if m:
+        cur = {"letter": m.group(1), "name": m.group(2).strip(),
+               "checks": [], "notes": [], "sub": None}
+        suites.append(cur); continue
+    if cur is None: continue
+    m = re.match(r"^  (\S) (.*)$", ln)
+    if m and m.group(1).strip() in "✓✗–":
+        cur["checks"].append({"st": m.group(1).strip(), "text": m.group(2)}); continue
+    m = re.match(r"^    (\d+) passed · (\d+) failed · (\d+) skipped$", ln)
+    if m:
+        cur["sub"] = tuple(map(int, m.groups())); continue
+    m = re.match(r"^    - (.*)$", ln)
+    if m:
+        cur["notes"].append(m.group(1)); continue
+    if re.match(r"^    \S", ln) and cur["checks"] and cur["sub"] is None:
+        cur["checks"][-1]["text"] += " " + ln.strip()
+    elif re.match(r"^    \S", ln) and cur["notes"] and cur["sub"] is None:
+        cur["notes"][-1] += " " + ln.strip()
+
+tm = re.search(r"Total: (\d+) passed · (\d+) failed · (\d+) skipped", text)
+total = tuple(map(int, tm.groups())) if tm else (0, 0, 0)
+vm = re.search(r"VERDICT: (CLEAN|ATTENTION)(.*)", text)
+verdict = (vm.group(1), vm.group(2).strip(" —.")) if vm else ("?", "")
+ts = re.search(r"^\s{2}(\d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+)", text, re.M)
+ts = ts.group(1) if ts else ""
+tgt = re.search(r"target: (\S+)", text)
+tgt = tgt.group(1) if tgt else ""
+
+def callout(s):
+    n = s["name"].split(" (")[0]
+    p, f, sk = s["sub"] or (0, 0, 0)
+    if f:
+        return f"\U0001F534 {n}: {f} of {p+f+sk} failed — red, needs attention."
+    if s["letter"] == "E":
+        return f"\U0001F7E1 {n}: {len(s['notes'])} known paths reported and tracked — none silent."
+    if p == 0 and sk:
+        why = s["checks"][0]["text"] if s["checks"] else "not run"
+        why = re.sub(r"\[.*?\]", "", why).strip()
+        return f"⚪ {n}: skipped — {why}."
+    tail = f", {sk} skipped" if sk else ""
+    return f"\U0001F7E2 {n}: {p} of {p+sk} green{tail}."
+
+clean = verdict[0] == "CLEAN"
+cards = []
+for s in suites:
+    p, f, sk = s["sub"] or (0, 0, 0)
+    cls = "red" if f else ("ok" if p else "skip")
+    items = "".join(
+        f'<li class="{("pass" if c["st"]=="✓" else ("skip" if c["st"]=="–" else "fail"))}">'
+        f'<span class="mark">{html.escape(c["st"])}</span>{html.escape(c["text"])}</li>'
+        for c in s["checks"])
+    notes = "".join(f"<li>{html.escape(n)}</li>" for n in s["notes"])
+    n_items = len(s["checks"]) or len(s["notes"])
+    ev_word = "item" if n_items == 1 else "items"
+    cards.append(f"""
+    <section class="card {cls}">
+      <p class="callout">{html.escape(callout(s))}</p>
+      <p class="subtotal">{p} passed · {f} failed · {sk} skipped</p>
+      <details><summary>Full evidence ({n_items} {ev_word})</summary>
+        <ul class="evidence">{items or notes}</ul>
+      </details>
+    </section>""")
+
+page = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leakage validation — {verdict[0]}</title>
+<style>
+:root{{--bg:#f6f7f9;--fg:#1c1e21;--card:#fff;--mut:#6b7280;--ok:#15803d;--bad:#b91c1c;
+--line:#e5e7eb;--hero1:#0f172a;--hero2:#1e3a5f}}
+@media(prefers-color-scheme:dark){{:root{{--bg:#0b0d10;--fg:#e8eaed;--card:#15181d;
+--mut:#9aa0a6;--ok:#4ade80;--bad:#f87171;--line:#2a2e35;--hero1:#020617;--hero2:#0c1a33}}}}
+*{{box-sizing:border-box}}body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+background:var(--bg);color:var(--fg);line-height:1.5}}
+.hero{{background:linear-gradient(135deg,var(--hero1),var(--hero2));color:#fff;padding:28px 20px}}
+.hero h1{{margin:0 0 4px;font-size:1.35rem}}.hero p{{margin:2px 0;color:#cbd5e1;font-size:.85rem}}
+.badge{{display:inline-block;margin-top:10px;padding:6px 16px;border-radius:999px;font-weight:700;
+letter-spacing:.08em;font-size:.85rem}}
+.badge.ok{{background:#166534}}.badge.bad{{background:#991b1b}}
+.meta{{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:.8rem;color:#cbd5e1}}
+.wrap{{max-width:640px;margin:0 auto;padding:16px}}
+.card{{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--mut);
+border-radius:12px;padding:14px 16px;margin:12px 0}}
+.card.ok{{border-left-color:var(--ok)}}.card.red{{border-left-color:var(--bad)}}
+.callout{{margin:0 0 4px;font-weight:650;font-size:.95rem}}
+.subtotal{{margin:0 0 6px;color:var(--mut);font-size:.8rem}}
+summary{{cursor:pointer;color:var(--mut);font-size:.82rem;padding:4px 0}}
+.evidence{{list-style:none;margin:8px 0 0;padding:0;font-size:.82rem}}
+.evidence li{{padding:5px 0;border-top:1px dashed var(--line);display:flex;gap:8px}}
+.mark{{font-weight:700;flex:none}}.pass .mark{{color:var(--ok)}}.fail .mark{{color:var(--bad)}}
+.skip .mark{{color:var(--mut)}}
+.total{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+margin:16px 0;text-align:center}}
+.total b{{font-size:1.1rem}}
+footer{{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}}
+</style></head><body>
+<header class="hero">
+  <h1>🛡️ Leakage validation</h1>
+  <p>muse-leakage-guard · bin/leakage-audit</p>
+  <span class="badge {"ok" if clean else "bad"}">{verdict[0]}</span>
+  <div class="meta"><span>{html.escape(ts)}</span><span>target: {html.escape(tgt)}</span></div>
+</header>
+<div class="wrap">
+{"".join(cards)}
+<div class="total"><b>Total: {total[0]} passed · {total[1]} failed · {total[2]} skipped</b>
+<p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">VERDICT: {verdict[0]}{" — " + html.escape(verdict[1]) if verdict[1] else ""}</p></div>
+<footer>Synthetic payloads only — nothing real was sent or disclosed.</footer>
+</div></body></html>"""
+open(dst, "w").write(page)
+print("wrote", dst)
+PYEOF
+PYRC=$?
+rm -f "$TMP"
+if [ $PYRC -ne 0 ]; then echo "leakage-report: HTML generation failed" >&2; exit 3; fi
+echo "REPORT: $OUT"
+exit $RC

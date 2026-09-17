@@ -11,6 +11,16 @@ holes. Run it after any change to the gates, shims, or briefing policy,
 and on a schedule if you want continuous assurance. It is also the
 leakage-protection step of the memory skill's daily health check.
 
+## How to run
+
+`bin/leakage-report [--out PATH]` — runs the full audit and writes a
+mobile-friendly HTML outcome report (default:
+`hidden_files/reports/leakage-validation-<timestamp>.html`). Each suite
+gets a one-sentence green/red callout ("🟢 Red-team gates: 29 of 29
+green."), with the full per-check evidence expandable underneath. The
+command exits with the audit's exit code (0 = CLEAN). `bin/leakage-audit`
+alone prints the same results as plain text.
+
 ## What it checks
 
 1. **Installation integrity** — gates and shims exist, are executable,
