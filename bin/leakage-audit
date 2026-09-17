@@ -31,13 +31,66 @@ FIX="$SKILL_DIR/bin/fixtures"
 SHIMDIR="$MEM_SKILL/bin/shims"
 
 PASS=0; FAIL=0; SKIPPED=0
-ok()   { PASS=$((PASS+1)); echo "PASS: $1"; }
-bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; [ -n "${2:-}" ] && echo "      $2"; }
-skip() { SKIPPED=$((SKIPPED+1)); echo "SKIP: $1 ($2)"; }
-section() { echo; echo "=== $1 ==="; }
+SUITE_LETTER=""; SUITE_NAME=""; sP=0; sF=0; sS=0
+ROWS=""; FINDINGS=""
+
+ok()   { PASS=$((PASS+1)); printf '  ✓ %s\n' "$1"; }
+bad()  { FAIL=$((FAIL+1)); printf '  ✗ %s\n' "$1"
+         FINDINGS="${FINDINGS}  ✗ $1"$'\n'
+         if [ -n "${2:-}" ]; then printf '      %s\n' "$2"
+           FINDINGS="${FINDINGS}      $2"$'\n'; fi; }
+skip() { SKIPPED=$((SKIPPED+1)); printf '  – %s  [%s]\n' "$1" "$2"; }
+
+begin_suite() { # <letter> <name>
+  SUITE_LETTER="$1"; SUITE_NAME="$2"; sP=$PASS; sF=$FAIL; sS=$SKIPPED
+  printf '\n  %s. %s\n' "$1" "$2"
+  printf '  %s\n' "──────────────────────────────────────────────────"
+}
+end_suite() {
+  local p=$((PASS-sP)) f=$((FAIL-sF)) s=$((SKIPPED-sS)) label
+  case "$SUITE_LETTER" in
+    A) label="Install integrity";; B) label="Red-team gates";;
+    C) label="Coverage checks";;   D) label="Log review";;
+    *) label="Residuals";;
+  esac
+  printf '  %s\n' "──────────────────────────────────────────────────"
+  printf '  %s: %d passed · %d failed · %d skipped\n' "$SUITE_NAME" "$p" "$f" "$s"
+  ROWS="${ROWS}$(printf '  %-34s %5d %5d %5d\n' "$SUITE_LETTER. $label" "$p" "$f" "$s")"$'\n'
+}
+
+print_header() {
+  printf '\n  muse-leakage-guard · leakage-audit\n'
+  printf '  %s · target: %s\n' "$(date '+%Y-%m-%d %H:%M %Z')" "$MEM_SKILL"
+  printf '  %s\n' "══════════════════════════════════════════════════"
+}
+
+print_summary() {
+  printf '\n  Summary\n'
+  printf '  %s\n' "──────────────────────────────────────────────────"
+  printf '  %-34s %5s %5s %5s\n' "Suite" "Pass" "Fail" "Skip"
+  printf '  %s\n' "──────────────────────────────────────────────────"
+  printf '%s' "$ROWS"
+  printf '  %s\n' "──────────────────────────────────────────────────"
+  printf '  %-34s %5d %5d %5d\n' "Total" "$PASS" "$FAIL" "$SKIPPED"
+  if [ "$FAIL" -eq 0 ]; then
+    if [ "$SKIPPED" -gt 0 ]; then
+      printf '\n  VERDICT: CLEAN — all %d checks passed (%d skipped).\n' "$PASS" "$SKIPPED"
+    else
+      printf '\n  VERDICT: CLEAN — all %d checks passed.\n' "$PASS"
+    fi
+  else
+    printf '\n  VERDICT: ATTENTION — %d finding(s) need review.\n' "$FAIL"
+    printf '\n  Findings\n'
+    printf '  %s\n' "──────────────────────────────────────────────────"
+    printf '%b' "$FINDINGS"
+  fi
+  printf '\n'
+}
+
+print_header
 
 # ---------------------------------------------------------------- A. install
-section "A. installation integrity"
+begin_suite "A" "Installation integrity"
 for f in bin/egress-gate bin/brief-gate bin/memory-egress-check; do
   if [ -x "$MEM_SKILL/$f" ]; then ok "$f present and executable"
   else bad "$f missing or not executable"; fi
@@ -61,8 +114,10 @@ for cli in hatch_gws_cli hatch_messenger_cli; do
   else bad "real $cli not found on PATH — shim has nothing to delegate to"; fi
 done
 
+end_suite
+
 # ------------------------------------------------- B. red team (fake sends)
-section "B. gate effectiveness (red team, synthetic payloads)"
+begin_suite "B" "Gate effectiveness (red team, synthetic payloads)"
 T="$(mktemp -d)"
 mkdir -p "$T/fakebin"
 cat > "$T/fakebin/real-gws" <<'EOF'
@@ -138,8 +193,10 @@ replayed="$(printf '%s' "$out" | sed -n '/---stdin---/,/---endstdin---/p' | sed 
 if [ "$replayed" = "$(cat "$FIX/clean.txt")" ]; then ok "messenger stdin replayed byte-identical on allow"
 else bad "messenger stdin replay mismatch"; fi
 
+end_suite
+
 # ------------------------------------------------------- C. static coverage
-section "C. attack-surface coverage (static checks)"
+begin_suite "C" "Attack-surface coverage (static checks)"
 if [ -f "$AGENTS_FILE" ]; then
   grep -q "bin/shims" "$AGENTS_FILE" && ok "agent manual mandates shim PATH" || bad "agent manual missing shim mandate"
   grep -q "brief-gate" "$AGENTS_FILE" && ok "agent manual mandates brief gating" || bad "agent manual missing brief-gate mandate"
@@ -168,8 +225,10 @@ if [ "${MOCHI_MEMORY_AUDIT:-0}" = "1" ]; then
   fi
 else skip "memory-audit run" "set MOCHI_MEMORY_AUDIT=1 to include"; fi
 
+end_suite
+
 # ------------------------------------------------------------- D. gate log
-section "D. gate audit-log review"
+begin_suite "D" "Gate audit-log review"
 if [ -f "$REAL_LOG" ]; then
   total="$(wc -l < "$REAL_LOG")"
   echo "      $total gate decisions logged"
@@ -188,14 +247,17 @@ if [ -f "$REAL_LOG" ]; then
   ok "gate log reviewed"
 else skip "gate log not found" "$REAL_LOG (no sends attempted yet)"; fi
 
+end_suite
+
 # ------------------------------------------------------------- E. residuals
-section "E. known residuals (reported, never silent)"
+begin_suite "E" "Known residuals (reported, never silent)"
 echo "      - browser-task sends: separate VM, shims can't reach; brief-level instruction only"
 echo "      - absolute-path bypass of shims: forbidden by policy, not technically preventable"
 echo "      - voice calls: phone tool's own confirmation flow (out of text-gate scope)"
 echo "      - brief-gate runs on mandate (no syscall interception for brief text)"
 
+end_suite
+
 rm -rf "$T"
-echo
-echo "=== $PASS passed, $FAIL failed, $SKIPPED skipped ==="
+print_summary
 [ "$FAIL" -eq 0 ]
