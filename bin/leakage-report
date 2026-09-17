@@ -70,6 +70,16 @@ def callout(s):
     return f"\U0001F7E2 {n}: {p} of {p+sk} green{tail}."
 
 clean = verdict[0] == "CLEAN"
+
+# What was actually tested, per suite — the concrete data behind the callout.
+TESTED = {
+    "A": "Verified on this machine, just now: all four gate binaries exist, are executable, and parse cleanly; both send shims (Gmail, Messenger) shadow the real CLIs on PATH, with the real binaries still reachable behind them.",
+    "B": "29 synthetic payloads fired at both gates and all five send paths: fake API keys, fake private keys, test SSN/card shapes (must block, rc=1), figures and phone numbers (must refuse without approval, rc=2), and clean text (must pass, rc=0). Every decision matched the expected exit code, and every blocked send shows invoked=0 — the real CLI was never reached.",
+    "C": "Static checks on the protection wiring: the agent manual mandates the shim PATH and brief gating, the briefing policy and free-share zones are defined, and all four daily-memory-refresh cron prompts export the shim PATH.",
+    "D": "Looked for the gate audit log at ~/workspace/memory-sync/egress-gate.log — not found, which means no gated send has been attempted yet. Nothing to review.",
+    "E": "Residual paths with no technical choke point, tracked openly rather than silently: browser-task sends (separate VM), absolute-path shim bypass, voice calls, and mandate-only brief gating.",
+}
+
 cards = []
 for s in suites:
     p, f, sk = s["sub"] or (0, 0, 0)
@@ -83,11 +93,18 @@ for s in suites:
     ev_word = "item" if n_items == 1 else "items"
     cards.append(f"""
     <section class="card {cls}">
-      <p class="callout">{html.escape(callout(s))}</p>
-      <p class="subtotal">{p} passed · {f} failed · {sk} skipped</p>
-      <details><summary>Full evidence ({n_items} {ev_word})</summary>
+      <div class="card-head" role="button" tabindex="0" aria-expanded="false">
+        <div class="head-text">
+          <p class="callout">{html.escape(callout(s))}</p>
+          <p class="subtotal">{p} passed · {f} failed · {sk} skipped</p>
+        </div>
+        <span class="chev" aria-hidden="true">▸</span>
+      </div>
+      <div class="detail" hidden>
+        <p class="tested">{html.escape(TESTED.get(s["letter"], ""))}</p>
+        <p class="ev-label">Full evidence ({n_items} {ev_word})</p>
         <ul class="evidence">{items or notes}</ul>
-      </details>
+      </div>
     </section>""")
 
 page = f"""<!DOCTYPE html>
@@ -113,7 +130,14 @@ border-radius:12px;padding:14px 16px;margin:12px 0}}
 .card.ok{{border-left-color:var(--ok)}}.card.red{{border-left-color:var(--bad)}}
 .callout{{margin:0 0 4px;font-weight:650;font-size:.95rem}}
 .subtotal{{margin:0 0 6px;color:var(--mut);font-size:.8rem}}
-summary{{cursor:pointer;color:var(--mut);font-size:.82rem;padding:4px 0}}
+.card-head{{display:flex;align-items:center;gap:10px;cursor:pointer;-webkit-tap-highlight-color:transparent}}
+.card-head:focus-visible{{outline:2px solid var(--ok);outline-offset:2px;border-radius:8px}}
+.head-text{{flex:1;min-width:0}}
+.chev{{flex:none;color:var(--mut);font-size:1.1rem;transition:transform .18s ease}}
+.card.open .chev{{transform:rotate(90deg)}}
+.detail{{border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}}
+.tested{{margin:0 0 8px;font-size:.85rem}}
+.ev-label{{margin:0;color:var(--mut);font-size:.78rem;font-weight:600}}
 .evidence{{list-style:none;margin:8px 0 0;padding:0;font-size:.82rem}}
 .evidence li{{padding:5px 0;border-top:1px dashed var(--line);display:flex;gap:8px}}
 .mark{{font-weight:700;flex:none}}.pass .mark{{color:var(--ok)}}.fail .mark{{color:var(--bad)}}
@@ -134,7 +158,25 @@ footer{{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}}
 <div class="total"><b>Total: {total[0]} passed · {total[1]} failed · {total[2]} skipped</b>
 <p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">VERDICT: {verdict[0]}{" — " + html.escape(verdict[1]) if verdict[1] else ""}</p></div>
 <footer>Synthetic payloads only — nothing real was sent or disclosed.</footer>
-</div></body></html>"""
+</div>
+<script>
+document.querySelectorAll('.card-head').forEach(function(head){{
+  function toggle(){{
+    var card = head.closest('.card');
+    var detail = card.querySelector('.detail');
+    var open = detail.hasAttribute('hidden');
+    if (open) {{ detail.removeAttribute('hidden'); }}
+    else {{ detail.setAttribute('hidden', ''); }}
+    card.classList.toggle('open', open);
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }}
+  head.addEventListener('click', toggle);
+  head.addEventListener('keydown', function(e){{
+    if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); toggle(); }}
+  }});
+}});
+</script>
+</body></html>"""
 open(dst, "w").write(page)
 print("wrote", dst)
 PYEOF
