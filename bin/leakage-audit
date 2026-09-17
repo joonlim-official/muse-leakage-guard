@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# leakage-audit: validate a private-memory leakage protection installation.
+#
+# Checks installation integrity, red-teams every gate and send path with
+# synthetic payloads, statically verifies coverage of the attack surface,
+# and reviews the gate audit log. Nothing is ever really sent: send-path
+# tests run against fake "real" binaries via MOCHI_REAL_* overrides.
+#
+# Configuration (env; ~/local.env inside the skill dir is sourced if present
+# and is gitignored — keep installation-specific values there):
+#   PERSONAL_MEMORY_SKILL   memory skill under test (default ~/workspace/skills/personal-memory-system)
+#   PERSONAL_MEMORY_ROOT    memory root passed through to the gates (default ~)
+#   MOCHI_AGENTS_FILE       agent operating manual (default ~/AGENTS.md)
+#   MOCHI_CRON_PROMPT_DIRS  colon-separated dirs of scheduled-job prompts (default: empty = skip)
+#   MOCHI_EGRESS_LOG        gate audit log (default ~/workspace/memory-sync/egress-gate.log)
+#   MOCHI_MEMORY_AUDIT=1    also run the memory skill's own memory-audit
+#
+# Exit 0 = all checks pass (skips don't fail). Exit 1 = at least one FAIL.
+set -u
+
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -f "$SKILL_DIR/local.env" ] && . "$SKILL_DIR/local.env"
+
+MEM_SKILL="${PERSONAL_MEMORY_SKILL:-$HOME/workspace/skills/personal-memory-system}"
+export PERSONAL_MEMORY_ROOT="${PERSONAL_MEMORY_ROOT:-$HOME}"
+AGENTS_FILE="${MOCHI_AGENTS_FILE:-$HOME/AGENTS.md}"
+CRON_DIRS="${MOCHI_CRON_PROMPT_DIRS:-}"
+GATE_LOG="${MOCHI_EGRESS_LOG:-$HOME/workspace/memory-sync/egress-gate.log}"
+REAL_LOG="$GATE_LOG"   # the configured log; validation below uses a temp one
+FIX="$SKILL_DIR/bin/fixtures"
+SHIMDIR="$MEM_SKILL/bin/shims"
+
+PASS=0; FAIL=0; SKIPPED=0
+ok()   { PASS=$((PASS+1)); echo "PASS: $1"; }
+bad()  { FAIL=$((FAIL+1)); echo "FAIL: $1"; [ -n "${2:-}" ] && echo "      $2"; }
+skip() { SKIPPED=$((SKIPPED+1)); echo "SKIP: $1 ($2)"; }
+section() { echo; echo "=== $1 ==="; }
+
+# ---------------------------------------------------------------- A. install
+section "A. installation integrity"
+for f in bin/egress-gate bin/brief-gate bin/memory-egress-check; do
+  if [ -x "$MEM_SKILL/$f" ]; then ok "$f present and executable"
+  else bad "$f missing or not executable"; fi
+done
+for f in bin/egress-gate bin/brief-gate bin/memory-egress-check bin/shims/hatch_gws_cli bin/shims/hatch_messenger_cli; do
+  if bash -n "$MEM_SKILL/$f" 2>/dev/null; then ok "$f parses"
+  else bad "$f has syntax errors"; fi
+done
+for cli in hatch_gws_cli hatch_messenger_cli; do
+  if [ ! -x "$SHIMDIR/$cli" ]; then bad "shim $cli missing"; continue; fi
+  resolved="$(PATH="$SHIMDIR:$PATH" command -v "$cli")"
+  if [ "$resolved" = "$SHIMDIR/$cli" ]; then ok "shim $cli shadows real binary on PATH"
+  else bad "shim $cli does NOT shadow (resolves to $resolved)"; fi
+  real_found=0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ "$d" = "$SHIMDIR" ] && continue
+    if [ -x "$d/$cli" ]; then real_found=1; break; fi
+  done <<< "${PATH//:/$'\n'}"
+  if [ "$real_found" -eq 1 ]; then ok "real $cli discoverable behind shim"
+  else bad "real $cli not found on PATH — shim has nothing to delegate to"; fi
+done
+
+# ------------------------------------------------- B. red team (fake sends)
+section "B. gate effectiveness (red team, synthetic payloads)"
+T="$(mktemp -d)"
+mkdir -p "$T/fakebin"
+cat > "$T/fakebin/real-gws" <<'EOF'
+#!/usr/bin/env bash
+echo "REAL-GWS-INVOKED args: $*"
+exit 0
+EOF
+cat > "$T/fakebin/real-msg" <<'EOF'
+#!/usr/bin/env bash
+echo "REAL-MSG-INVOKED args: $*"
+echo "---stdin---"; cat; echo "---endstdin---"
+exit 0
+EOF
+chmod +x "$T/fakebin"/real-*
+export MOCHI_REAL_HATCH_GWS_CLI="$T/fakebin/real-gws"
+export MOCHI_REAL_HATCH_MESSENGER_CLI="$T/fakebin/real-msg"
+export MOCHI_EGRESS_LOG="$T/gate.log"   # keep validation out of the real log
+export PATH="$SHIMDIR:$PATH"
+
+gate_expect() { # <name> <gate:egress|brief> <fixture> <want_rc>
+  local name="$1" gate="$2" fix="$3" want="$4" rc
+  if [ "$gate" = brief ]; then
+    "$MEM_SKILL/bin/brief-gate" --brief-file "$FIX/$fix" --task "leakage-audit:$name" >/dev/null 2>&1; rc=$?
+  else
+    "$MEM_SKILL/bin/egress-gate" --content-file "$FIX/$fix" --context "leakage-audit:$name" >/dev/null 2>&1; rc=$?
+  fi
+  if [ "$rc" -eq "$want" ]; then ok "$name (rc=$rc)"
+  else bad "$name" "want rc=$want, got rc=$rc"; fi
+}
+send_expect() { # <name> <want_rc> <want_invoked 0|1> -- cmd...
+  local name="$1" want_rc="$2" want_inv="$3"; shift 3
+  [ "${1:-}" = "--" ] && shift
+  local out rc inv=0
+  out="$("$@" 2>&1)"; rc=$?
+  case "$out" in *REAL-*-INVOKED*) inv=1;; esac
+  if [ "$rc" -eq "$want_rc" ] && [ "$inv" -eq "$want_inv" ]; then ok "$name (rc=$rc invoked=$inv)"
+  else bad "$name" "want rc=$want_rc invoked=$want_inv, got rc=$rc invoked=$inv :: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+}
+
+for g in egress brief; do
+  gate_expect "$g gate: clean passes"            "$g" clean.txt   0
+  gate_expect "$g gate: fake api key blocked"   "$g" secret.txt  1
+  gate_expect "$g gate: fake private key blocked" "$g" secret2.txt 1
+  gate_expect "$g gate: test SSN blocked"       "$g" ssn.txt     1
+  gate_expect "$g gate: test card blocked"      "$g" card.txt    1
+  gate_expect "$g gate: figure needs approval"  "$g" figure.txt  2
+  gate_expect "$g gate: phone needs approval"   "$g" phone.txt   2
+done
+
+G=hatch_gws_cli; M=hatch_messenger_cli
+send_expect "gmail +send clean passes" 0 1 -- $G gmail +send --to a@example.com --subject t --body "$(cat "$FIX/clean.txt")"
+send_expect "gmail +send secret blocked" 1 0 -- $G gmail +send --to a@example.com --subject t --body "$(cat "$FIX/secret.txt")"
+send_expect "gmail +reply ssn blocked" 1 0 -- $G gmail +reply --message-id x --body "$(cat "$FIX/ssn.txt")"
+send_expect "gmail +send figure refused w/o approval" 2 0 -- $G gmail +send --to a@example.com --subject t --body "$(cat "$FIX/figure.txt")"
+send_expect "gmail +send figure allowed with approval" 0 1 -- env MOCHI_EGRESS_APPROVED=1 $G gmail +send --to a@example.com --subject t --body "$(cat "$FIX/figure.txt")"
+send_expect "gmail +send --draft with secret passes through (stays in account)" 0 1 -- $G gmail +send --to a@example.com --subject t --body "$(cat "$FIX/secret.txt")" --draft
+send_expect "gmail non-send passes through" 0 1 -- $G gmail +triage --max 1
+
+RAW_MIME="$(python3 -c "import base64,sys; sys.stdout.write(base64.urlsafe_b64encode(open('$FIX/card.txt','rb').read()).decode())")"
+send_expect "raw messages.send with card in MIME blocked" 1 0 -- $G gmail users messages send --params "{\"raw\":\"$RAW_MIME\"}"
+
+send_expect "messenger send clean passes" 0 1 -- $M send --cid '999' --text-stdin < "$FIX/clean.txt"
+send_expect "messenger send secret blocked" 1 0 -- $M send --cid '999' --text-stdin < "$FIX/secret2.txt"
+send_expect "messenger threads passes through" 0 1 -- $M threads --limit 1 < /dev/null
+
+send_expect "drive permissions create refused w/o approval" 2 0 -- $G drive permissions create --params '{}'
+send_expect "drive permissions create allowed with approval" 0 1 -- env MOCHI_EGRESS_APPROVED=1 $G drive permissions create --params '{}'
+send_expect "drive files list passes through (free zone)" 0 1 -- $G drive files list
+
+# stdin replay integrity: what the fake binary received must equal the fixture
+out="$($M send --cid '999' --text-stdin < "$FIX/clean.txt" 2>/dev/null)"
+replayed="$(printf '%s' "$out" | sed -n '/---stdin---/,/---endstdin---/p' | sed '1d;$d')"
+if [ "$replayed" = "$(cat "$FIX/clean.txt")" ]; then ok "messenger stdin replayed byte-identical on allow"
+else bad "messenger stdin replay mismatch"; fi
+
+# ------------------------------------------------------- C. static coverage
+section "C. attack-surface coverage (static checks)"
+if [ -f "$AGENTS_FILE" ]; then
+  grep -q "bin/shims" "$AGENTS_FILE" && ok "agent manual mandates shim PATH" || bad "agent manual missing shim mandate"
+  grep -q "brief-gate" "$AGENTS_FILE" && ok "agent manual mandates brief gating" || bad "agent manual missing brief-gate mandate"
+else skip "agent manual not found" "$AGENTS_FILE"; fi
+[ -f "$MEM_SKILL/references/subagent-briefing.md" ] && ok "briefing policy reference exists" || bad "references/subagent-briefing.md missing"
+grep -q "Free-share zones" "$MEM_SKILL/references/data-protection.md" 2>/dev/null && ok "free-share zones defined in data-protection.md" || bad "data-protection.md missing free-share zones"
+if [ -n "$CRON_DIRS" ]; then
+  while IFS=: read -r d; do
+    [ -n "$d" ] || continue
+    total=0; wired=0
+    while IFS= read -r f; do
+      total=$((total+1))
+      grep -q 'bin/shims:$PATH' "$f" && wired=$((wired+1))
+    done < <(find "$d" -name '*.md' 2>/dev/null)
+    if [ "$total" -eq 0 ]; then skip "no prompt files in $d" "empty"
+    elif [ "$wired" -eq "$total" ]; then ok "cron prompts in $d wire shim PATH ($wired/$total)"
+    else bad "cron prompts in $d missing shim PATH" "$wired/$total wired"; fi
+  done <<< "${CRON_DIRS//:/$'\n'}"
+else skip "cron prompt dirs not configured" "set MOCHI_CRON_PROMPT_DIRS"; fi
+if [ "${MOCHI_MEMORY_AUDIT:-0}" = "1" ]; then
+  audit_out="$("$MEM_SKILL/bin/memory-audit" 2>&1)"; arc=$?
+  if [ "$arc" -eq 0 ]; then ok "memory-audit green"
+  else
+    bad "memory-audit reported findings (judge public vs private yourself)"
+    printf '%s\n' "$audit_out" | grep -E '^  (/|!)' | head -12 | sed 's/^/      /'
+  fi
+else skip "memory-audit run" "set MOCHI_MEMORY_AUDIT=1 to include"; fi
+
+# ------------------------------------------------------------- D. gate log
+section "D. gate audit-log review"
+if [ -f "$REAL_LOG" ]; then
+  total="$(wc -l < "$REAL_LOG")"
+  echo "      $total gate decisions logged"
+  for v in BLOCKED needs-approval approved-override; do
+    n="$(grep -c "| $v$" "$REAL_LOG" 2>/dev/null || true)"
+    [ "$n" -gt 0 ] && echo "      $v: $n"
+  done
+  if grep -q "| approved-override$" "$REAL_LOG"; then
+    echo "      --- overrides (need human review) ---"
+    grep "| approved-override$" "$REAL_LOG" | tail -5 | sed 's/^/      /'
+  fi
+  if grep -q "| BLOCKED$" "$REAL_LOG"; then
+    echo "      --- blocked attempts ---"
+    grep "| BLOCKED$" "$REAL_LOG" | tail -5 | sed 's/^/      /'
+  fi
+  ok "gate log reviewed"
+else skip "gate log not found" "$REAL_LOG (no sends attempted yet)"; fi
+
+# ------------------------------------------------------------- E. residuals
+section "E. known residuals (reported, never silent)"
+echo "      - browser-task sends: separate VM, shims can't reach; brief-level instruction only"
+echo "      - absolute-path bypass of shims: forbidden by policy, not technically preventable"
+echo "      - voice calls: phone tool's own confirmation flow (out of text-gate scope)"
+echo "      - brief-gate runs on mandate (no syscall interception for brief text)"
+
+rm -rf "$T"
+echo
+echo "=== $PASS passed, $FAIL failed, $SKIPPED skipped ==="
+[ "$FAIL" -eq 0 ]
