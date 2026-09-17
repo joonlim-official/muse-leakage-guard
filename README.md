@@ -115,7 +115,7 @@ What you need:
   looks next to itself at `~/workspace/skills/personal-memory-system`;
   set `PERSONAL_MEMORY_SKILL` (in `local.env` or the environment) to
   point anywhere else.
-- `bash` only. No dependencies, no network, nothing is ever really sent —
+- `bash` + `python3`. No network. By default nothing is ever really sent —
   the red-team tests run against fake binaries and every blocked send
   verifies the real binary was never invoked.
 
@@ -145,10 +145,49 @@ personal paths are baked into the skill:
 | `PERSONAL_MEMORY_ROOT` | memory root passed through to the gates | `~` |
 | `MOCHI_CRON_PROMPT_DIRS` | dirs whose cron prompts must wire the shim `PATH` | unset (check skipped) |
 | `MOCHI_MEMORY_AUDIT` | set to `1` to include the memory skill's own audit | `0` |
+| `MOCHI_LIVE_FIRE` | set to `1` for live-fire mode (see below) | unset (simulated) |
+| `MOCHI_TEST_EMAIL` | live-fire email recipient — owner's own address only | `powerlim2@gmail.com` |
+| `MOCHI_TEST_MESSENGER_CID` | live-fire Messenger target — must resolve to the owner's own chat | auto-discovered |
 
 All test fixtures and corpus payloads are synthetic and impersonal —
 shaped to trip the detectors, belonging to nobody. Never put real
 private data in `bin/fixtures/` or `bin/adversarial-corpus.txt`.
+
+## Live-fire mode (opt-in, owner's installation only)
+
+The simulated red team proves the gates refuse bad sends — but nothing
+ever really leaves the machine. Live-fire exercises the genuine
+end-to-end path (shim → gate → real binary) with real sends:
+
+```bash
+MOCHI_LIVE_FIRE=1 bin/leakage-audit
+```
+
+Rules, enforced by design:
+
+- **Opt-in only.** Unset or empty `MOCHI_LIVE_FIRE` keeps today's
+  fake-binary behavior — safe for CI and external contributors. Live-fire
+  is never the default.
+- **Sends go to the owner only, ever.** The email target defaults to the
+  owner's own address (`MOCHI_TEST_EMAIL`); the Messenger target is
+  auto-discovered as a chat containing only the owner, and an explicit
+  `MOCHI_TEST_MESSENGER_CID` that does not resolve to such a chat fails
+  closed. Never point these variables at someone else's address.
+- **Payloads stay synthetic.** The same fixtures as the simulated suite —
+  nothing real, same invariant as everything else in this repo.
+- **Small subset.** One block-tier, one approval-tier (explicit
+  `MOCHI_EGRESS_APPROVED=1`), and one clean send per channel — not the
+  full suite, to avoid inbox spam. Drive share tests stay simulated: a
+  live run must never grant real access to anyone.
+- **Block-tier assertions are unchanged:** exit 1, and the real binary is
+  never invoked. If a block-tier test ever arrives in your inbox, that is
+  a real finding — report it, do not re-run.
+- **The mode is always labelled.** The audit header, summary, and HTML
+  report show `SIMULATED` vs `LIVE-FIRE` so a reader never mistakes one
+  for the other.
+
+Live-fire is for the owner's own installation. Contributors validating a
+fork should stay in simulated mode.
 
 ## Layout
 

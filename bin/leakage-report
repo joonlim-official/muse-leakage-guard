@@ -54,6 +54,8 @@ ts = re.search(r"^\s{2}(\d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+)", text, re.M)
 ts = ts.group(1) if ts else ""
 tgt = re.search(r"target: (\S+)", text)
 tgt = tgt.group(1) if tgt else ""
+mm = re.search(r"^  mode: (SIMULATED|LIVE-FIRE)", text, re.M)
+mode = mm.group(1) if mm else "SIMULATED"
 
 def callout(s):
     n = s["name"].split(" (")[0]
@@ -124,6 +126,9 @@ background:var(--bg);color:var(--fg);line-height:1.5}}
 letter-spacing:.08em;font-size:.85rem}}
 .badge.ok{{background:#166534}}.badge.bad{{background:#991b1b}}
 .meta{{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:.8rem;color:#cbd5e1}}
+.mode{{font-weight:700;padding:2px 10px;border-radius:999px}}
+.mode.sim{{background:#1e3a5f;color:#cbd5e1}}
+.mode.live{{background:#7c2d12;color:#fed7aa}}
 .wrap{{max-width:640px;margin:0 auto;padding:16px}}
 .card{{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--mut);
 border-radius:12px;padding:14px 16px;margin:12px 0}}
@@ -151,13 +156,13 @@ footer{{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}}
   <h1>🛡️ Leakage validation</h1>
   <p>muse-leakage-guard · bin/leakage-audit</p>
   <span class="badge {"ok" if clean else "bad"}">{verdict[0]}</span>
-  <div class="meta"><span>{html.escape(ts)}</span><span>target: {html.escape(tgt)}</span></div>
+  <div class="meta"><span>{html.escape(ts)}</span><span>target: {html.escape(tgt)}</span><span class="mode {"live" if mode == "LIVE-FIRE" else "sim"}">mode: {mode}</span></div>
 </header>
 <div class="wrap">
 {"".join(cards)}
 <div class="total"><b>Total: {total[0]} passed · {total[1]} failed · {total[2]} skipped</b>
 <p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">VERDICT: {verdict[0]}{" — " + html.escape(verdict[1]) if verdict[1] else ""}</p></div>
-<footer>Synthetic payloads only — nothing real was sent or disclosed.</footer>
+<footer>{"Real sends to the owner's own accounts — synthetic payloads only." if mode == "LIVE-FIRE" else "Synthetic payloads only — nothing real was sent or disclosed."}</footer>
 </div>
 <script>
 document.querySelectorAll('.card-head').forEach(function(head){{

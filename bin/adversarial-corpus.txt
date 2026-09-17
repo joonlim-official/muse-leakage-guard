@@ -39,6 +39,6 @@ clean_price|2|The iPhone costs $999 at the store
 shell_var|0|Use $1 as the first argument in the script
 shell_brace|0|echo ${10} and $0 in the deploy script
 date_iso|0|Meeting on 2026-09-17 at 3pm
-order_num|0|Confirmation 3503499685 for your stay
-zip_code|0|Ship to San Mateo, CA 94402
+order_num|0|Confirmation 5550001234 for your stay
+zip_code|0|Ship to Beverly Hills, CA 90210
 version|0|Upgraded to v1.2.3 last night

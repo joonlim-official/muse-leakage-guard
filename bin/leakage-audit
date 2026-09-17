@@ -3,10 +3,13 @@
 #
 # Checks installation integrity, red-teams every gate and send path with
 # synthetic payloads, statically verifies coverage of the attack surface,
-# and reviews the gate audit log. Nothing is ever really sent: send-path
-# tests run against fake "real" binaries via MOCHI_REAL_* overrides.
+# and reviews the gate audit log. By default nothing is ever really sent:
+# send-path tests run against fake "real" binaries via MOCHI_REAL_* overrides.
+# Opt-in live-fire mode (MOCHI_LIVE_FIRE=1) exercises the genuine end-to-end
+# path instead: real sends to the owner's own accounts, synthetic payloads
+# only. The report always labels which mode ran (SIMULATED vs LIVE-FIRE).
 #
-# Configuration (env; ~/local.env inside the skill dir is sourced if present
+# Configuration (env; $SKILL_DIR/local.env inside the skill dir is sourced if present
 # and is gitignored — keep installation-specific values there):
 #   PERSONAL_MEMORY_SKILL   memory skill under test (default ~/workspace/skills/personal-memory-system)
 #   PERSONAL_MEMORY_ROOT    memory root passed through to the gates (default ~)
@@ -14,6 +17,13 @@
 #   MOCHI_CRON_PROMPT_DIRS  colon-separated dirs of scheduled-job prompts (default: empty = skip)
 #   MOCHI_EGRESS_LOG        gate audit log (default ~/workspace/memory-sync/egress-gate.log)
 #   MOCHI_MEMORY_AUDIT=1    also run the memory skill's own memory-audit
+#   MOCHI_LIVE_FIRE=1       opt-in: suite B sends for real to the owner's own
+#                           accounts (default: simulated via fake binaries)
+#   MOCHI_TEST_EMAIL        live-fire email recipient (default powerlim2@gmail.com).
+#                           Owner's own address only — never anyone else's.
+#   MOCHI_TEST_MESSENGER_CID  live-fire Messenger target conversation id.
+#                           Must resolve to the owner's own chat (default:
+#                           auto-discovered); anything else fails closed.
 #
 # Exit 0 = all checks pass (skips don't fail). Exit 1 = at least one FAIL.
 set -u
@@ -29,6 +39,16 @@ GATE_LOG="${MOCHI_EGRESS_LOG:-$HOME/workspace/memory-sync/egress-gate.log}"
 REAL_LOG="$GATE_LOG"   # the configured log; validation below uses a temp one
 FIX="$SKILL_DIR/bin/fixtures"
 SHIMDIR="$MEM_SKILL/bin/shims"
+
+# Validation mode, labelled in the header, the summary, and the HTML report
+# so a reader never mistakes a simulated run for a live-fire one.
+if [ "${MOCHI_LIVE_FIRE:-}" = "1" ]; then
+  AUDIT_MODE="LIVE-FIRE (real sends to owner's own accounts; synthetic payloads only)"
+  AUDIT_MODE_SHORT="LIVE-FIRE"
+else
+  AUDIT_MODE="SIMULATED (fake binaries; nothing is sent)"
+  AUDIT_MODE_SHORT="SIMULATED"
+fi
 
 PASS=0; FAIL=0; SKIPPED=0
 SUITE_LETTER=""; SUITE_NAME=""; sP=0; sF=0; sS=0
@@ -97,6 +117,7 @@ print_header() {
   printf '\n  muse-leakage-guard · leakage-audit\n'
   printf '  %s\n' "$(date '+%Y-%m-%d %H:%M %Z')"
   printf '%s\n' "target: $(shorten "$MEM_SKILL")" | fold -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+  printf '%s\n' "mode: $AUDIT_MODE" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
   printf '  %s\n' "$BOLD_RULE"
 }
 
@@ -130,6 +151,7 @@ print_summary() {
   else
     v="VERDICT: ATTENTION — $FAIL finding(s) need review."
   fi
+  printf '%s\n' "mode: $AUDIT_MODE" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
   printf '%s\n' "$v" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
   if [ "$FAIL" -gt 0 ]; then
     printf '\n  Findings\n'
@@ -183,21 +205,31 @@ end_suite
 # ------------------------------------------------- B. red team (fake sends)
 begin_suite "B" "Gate effectiveness (red team, synthetic payloads)"
 T="$(mktemp -d)"
-mkdir -p "$T/fakebin"
-cat > "$T/fakebin/real-gws" <<'EOF'
+LIVE_FIRE="${MOCHI_LIVE_FIRE:-}"
+if [ "$LIVE_FIRE" = "1" ]; then
+  # Live-fire: the shims delegate to the genuine CLIs (no MOCHI_REAL_* overrides),
+  # exercising the true end-to-end path: shim -> gate -> real binary.
+  # Real sends go to the owner's own accounts ONLY (see below); payloads stay
+  # synthetic. Drive share tests stay simulated — a live run must never
+  # grant real access to anyone.
+  wdetail "LIVE-FIRE: real sends to the owner's own accounts; synthetic payloads only."
+else
+  mkdir -p "$T/fakebin"
+  cat > "$T/fakebin/real-gws" <<'EOF'
 #!/usr/bin/env bash
 echo "REAL-GWS-INVOKED args: $*"
 exit 0
 EOF
-cat > "$T/fakebin/real-msg" <<'EOF'
+  cat > "$T/fakebin/real-msg" <<'EOF'
 #!/usr/bin/env bash
 echo "REAL-MSG-INVOKED args: $*"
 echo "---stdin---"; cat; echo "---endstdin---"
 exit 0
 EOF
-chmod +x "$T/fakebin"/real-*
-export MOCHI_REAL_HATCH_GWS_CLI="$T/fakebin/real-gws"
-export MOCHI_REAL_HATCH_MESSENGER_CLI="$T/fakebin/real-msg"
+  chmod +x "$T/fakebin"/real-*
+  export MOCHI_REAL_HATCH_GWS_CLI="$T/fakebin/real-gws"
+  export MOCHI_REAL_HATCH_MESSENGER_CLI="$T/fakebin/real-msg"
+fi
 export MOCHI_EGRESS_LOG="$T/gate.log"   # keep validation out of the real log
 export PATH="$SHIMDIR:$PATH"
 
@@ -248,6 +280,9 @@ for g in egress brief; do
 done
 
 G=hatch_gws_cli; M=hatch_messenger_cli
+
+if [ "$LIVE_FIRE" != "1" ]; then
+# --- simulated send path: fake "real" binaries; nothing is ever sent ---
 send_expect "gmail +send clean passes" 0 1 -- $G gmail +send --to a@example.com --subject t --body "$(cat "$FIX/clean.txt")"
 send_expect "gmail +send secret blocked" 1 0 -- $G gmail +send --to a@example.com --subject t --body "$(cat "$FIX/secret.txt")"
 send_expect "gmail +reply ssn blocked" 1 0 -- $G gmail +reply --message-id x --body "$(cat "$FIX/ssn.txt")"
@@ -272,6 +307,74 @@ out="$($M send --cid '999' --text-stdin < "$FIX/clean.txt" 2>/dev/null)"
 replayed="$(printf '%s' "$out" | sed -n '/---stdin---/,/---endstdin---/p' | sed '1d;$d')"
 if [ "$replayed" = "$(cat "$FIX/clean.txt")" ]; then ok "messenger stdin replayed byte-identical on allow"
 else bad "messenger stdin replay mismatch" "" "the shim altered stdin when replaying to the real binary. Inspect the shim's stdin handling before it reaches the delegate."; fi
+else
+# --- live-fire: small representative subset, real sends to the owner's own accounts ---
+# Payloads are the same synthetic fixtures; only the transport is real.
+live_send_expect() { # <name> <want_rc> -- cmd...
+  local name="$1" want="$2"; shift 2
+  [ "${1:-}" = "--" ] && shift
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq "$want" ]; then ok "$name (rc=$rc)"
+  else bad "$name" "want rc=$want, got rc=$rc :: $(printf '%s' "$out" | head -3 | tr '\n' '|')" \
+    "a live-fire send behaved unexpectedly. Inspect the shim and gate path for this subcommand before re-running with MOCHI_LIVE_FIRE=1."
+  fi
+}
+
+LIVE_EMAIL="${MOCHI_TEST_EMAIL:-powerlim2@gmail.com}"
+if [ -z "$LIVE_EMAIL" ]; then
+  bad "live-fire: no test email configured" "" "set MOCHI_TEST_EMAIL to the owner's own address (never anyone else's)."
+else
+  wdetail "live-fire target: $LIVE_EMAIL (owner's own address)"
+  MARK="leakage-audit live-fire $(date +%Y%m%d-%H%M%S)"
+  # Block-tier: the gate must refuse (rc=1), so the shim never invokes the real
+  # binary. If a block-tier test ever arrives in the inbox, that is a real
+  # finding — report it, do not re-run.
+  live_send_expect "gmail live-fire: secret blocked, nothing sent" 1 -- $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] block-tier test (synthetic)" --body "$(cat "$FIX/secret.txt")"
+  live_send_expect "gmail live-fire: clean delivered end-to-end" 0 -- $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] clean test (synthetic)" --body "$(cat "$FIX/clean.txt")"
+  live_send_expect "gmail live-fire: figure delivered with explicit approval" 0 -- env MOCHI_EGRESS_APPROVED=1 $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] approval-tier test (synthetic)" --body "$(cat "$FIX/figure.txt")"
+fi
+
+# Resolve the owner's own Messenger chat: a thread whose participants are all
+# the owner. An explicit MOCHI_TEST_MESSENGER_CID must resolve to such a chat
+# or the run fails closed — live-fire never sends to anyone but the owner.
+SELF_CID=""
+if SELF_CID="$("$M" threads --limit 50 2>/dev/null | python3 -c '
+import json,sys
+self_id=None; cids={}
+for line in sys.stdin:
+    s=line.strip()
+    if not s.startswith("{"): continue
+    try: d=json.loads(s)
+    except Exception: continue
+    data=d.get("data")
+    if not isinstance(data,dict): continue
+    sid=(data.get("_cache") or {}).get("self_user_id")
+    if sid: self_id=str(sid)
+    for t in data.get("threads") or []:
+        parts=[str(p.get("id")) for p in (t.get("participants") or [])]
+        cids[str(t.get("conversation_id"))]=parts
+if not self_id: sys.exit(0)
+wanted=sys.argv[1] if len(sys.argv)>1 else ""
+if wanted:
+    parts=cids.get(wanted)
+    if parts and all(p==self_id for p in parts): print(wanted)
+    else: sys.exit(2)
+else:
+    for cid,parts in cids.items():
+        if parts and all(p==self_id for p in parts): print(cid); break
+' "${MOCHI_TEST_MESSENGER_CID:-}")"; then
+  if [ -n "$SELF_CID" ]; then
+    wdetail "live-fire target: owner's own Messenger chat ($SELF_CID)"
+    live_send_expect "messenger live-fire: clean delivered to self" 0 -- $M send --cid "$SELF_CID" --text-stdin < "$FIX/clean.txt"
+    live_send_expect "messenger live-fire: secret blocked, nothing sent" 1 -- $M send --cid "$SELF_CID" --text-stdin < "$FIX/secret2.txt"
+  else
+    skip "messenger live-fire: no owner-only chat found" "send yourself one message, then re-run"
+  fi
+else
+  bad "live-fire: MOCHI_TEST_MESSENGER_CID does not resolve to the owner's own chat" "" "point it at the conversation id of a chat containing only the owner, or unset it for auto-discovery. Live-fire never sends to anyone but the owner."
+fi
+fi
 
 end_suite
 

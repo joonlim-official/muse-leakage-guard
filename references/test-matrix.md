@@ -17,7 +17,12 @@ belonging to nobody.
 | every fixture present and non-empty | no vacuous tests — an empty "clean" fixture passes trivially, a missing block-tier fixture errors into a misleading verdict |
 | adversarial corpus has ≥1 case | an empty corpus would report 0/0 as a pass; the runner now fails closed on zero cases |
 
-## B. Gate effectiveness (red team, fake real binaries — nothing is ever sent)
+## B. Gate effectiveness (red team; simulated by default, live-fire opt-in)
+
+Simulated mode runs every send-path test against fake real binaries (nothing
+is ever sent). With `MOCHI_LIVE_FIRE=1`, suite B instead runs a small
+representative subset for real — same synthetic payloads, genuine end-to-end
+path (shim → gate → real binary), sends to the owner's own accounts only.
 
 | Payload → target | Expected | Proves |
 |---|---|---|
@@ -34,6 +39,10 @@ belonging to nobody.
 | clean → messenger `send` | allowed, stdin replayed byte-identical | the gate doesn't corrupt legitimate sends |
 | drive `permissions create` | refused (2); allowed with approval | sharing with others is never a free-share zone |
 | drive `files list`, gmail `+triage` | pass through | reads and own-Drive ops are untouched |
+| *(live-fire only)* secret → gmail `+send` to owner's own address | exit 1, nothing arrives | block-tier holds on the genuine end-to-end path |
+| *(live-fire only)* clean → gmail `+send` to owner's own address | exit 0, delivered | clean sends complete the real path |
+| *(live-fire only)* figure → gmail `+send` with `MOCHI_EGRESS_APPROVED=1` | exit 0, delivered | approval override works end-to-end |
+| *(live-fire only)* clean/secret → messenger `send` to owner's own chat | 0 / 1 | same guarantees over the messenger path; target must resolve to the owner's own chat or the run fails closed |
 
 ## C. Coverage gaps (static checks)
 
