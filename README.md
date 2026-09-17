@@ -158,15 +158,18 @@ private data in `bin/fixtures/` or `bin/adversarial-corpus.txt`.
 - `bin/fixtures/` — synthetic payloads only.
 - `bin/leakage-report` — HTML report generator.
 - `references/attack-surface.md` — enumerated leakage paths and controls.
-- `references/test-matrix.md` — what each check proves.
+- `references/test-matrix.md` — what each check proves, plus the
+  scenario coverage map: every attack-surface scenario must have a row
+  (the audit fails if one is missing).
 - `reports/` — saved audit reports (gitignored).
 
 ## Adding a new exfiltration path
 
 1. Add a row to `references/attack-surface.md`.
 2. Add the control (gate or policy).
-3. Add the test to `bin/leakage-audit` and the expectation to
-   `references/test-matrix.md`.
+3. Add the test to `bin/leakage-audit` and a row to the coverage map in
+   `references/test-matrix.md` (section F) — the audit fails until the new
+   scenario is mapped.
 4. Illustrate the scenario in this README with a synthetic example.
 
 A path with no scenario is an unexamined path — the failure mode this

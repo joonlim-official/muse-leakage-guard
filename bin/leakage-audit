@@ -293,6 +293,35 @@ if [ "${MOCHI_MEMORY_AUDIT:-0}" = "1" ]; then
   fi
 else skip "memory-audit run" "set MOCHI_MEMORY_AUDIT=1 to include"; fi
 
+# F. scenario coverage map: every attack-surface scenario must be mapped
+map_ids="$(grep -oE '^### [A-E][0-9]+\.' "$SKILL_DIR/references/attack-surface.md" | grep -oE '[A-E][0-9]+')"
+map_count="$(printf '%s\n' $map_ids | grep -c .)"
+unmapped=""
+for sid in $map_ids; do
+  grep -q "| $sid " "$SKILL_DIR/references/test-matrix.md" || unmapped="$unmapped $sid"
+done
+if [ -z "$unmapped" ]; then ok "all $map_count attack-surface scenarios mapped in test-matrix.md"
+else bad "scenarios missing from the coverage map:$unmapped" "" "add a row for each to references/test-matrix.md section F, then re-run this audit."; fi
+
+# B2/B3: public repos must not contain denylisted (private) literals
+DENYLIST="$PERSONAL_MEMORY_ROOT/memory/.egress-denylist"
+if [ -s "$DENYLIST" ]; then
+  deny_tmp="$(mktemp)"
+  grep -vE '^[[:space:]]*(#|$)' "$DENYLIST" > "$deny_tmp"
+  if [ -s "$deny_tmp" ]; then
+    leak=""
+    for repo in "$SKILL_DIR" "$MEM_SKILL"; do
+      if [ -d "$repo/.git" ]; then
+        hits="$(cd "$repo" && git ls-files -z | xargs -0 grep -lF -f "$deny_tmp" 2>/dev/null || true)"
+        [ -n "$hits" ] && leak="${leak}${repo}: $(printf '%s' "$hits" | tr '\n' ' ')"
+      fi
+    done
+    if [ -n "$leak" ]; then bad "denylisted literals found in public repo files" "$leak" "remove the private literals from the public repos (B2/B3 scenarios), then re-run this audit."
+    else ok "no denylisted literals in public repo tracked files (B2/B3)"; fi
+  else skip "denylist empty" "no literals to check"; fi
+  rm -f "$deny_tmp"
+else skip "no egress denylist" "$DENYLIST missing or empty"; fi
+
 end_suite
 
 # ------------------------------------------------------------- D. gate log
