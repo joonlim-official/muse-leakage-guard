@@ -9,8 +9,10 @@
 # path instead: real sends to the owner's own accounts, synthetic payloads
 # only. The report always labels which mode ran (SIMULATED vs LIVE-FIRE).
 #
-# Configuration (env; $SKILL_DIR/local.env inside the skill dir is sourced if present
-# and is gitignored — keep installation-specific values there):
+# Configuration (env wins; $SKILL_DIR/local.env inside the skill dir is sourced
+# if present and only fills variables not already set in the environment.
+# local.env is gitignored — keep installation-specific values there.
+# Precedence: explicit environment > local.env > built-in default):
 #   PERSONAL_MEMORY_SKILL   memory skill under test (default ~/workspace/skills/personal-memory-system)
 #   PERSONAL_MEMORY_ROOT    memory root passed through to the gates (default ~)
 #   MOCHI_AGENTS_FILE       agent operating manual (default ~/AGENTS.md)
@@ -18,18 +20,43 @@
 #   MOCHI_EGRESS_LOG        gate audit log (default ~/workspace/memory-sync/egress-gate.log)
 #   MOCHI_MEMORY_AUDIT=1    also run the memory skill's own memory-audit
 #   MOCHI_LIVE_FIRE=1       opt-in: suite B sends for real to the owner's own
-#                           accounts (default: simulated via fake binaries)
-#   MOCHI_TEST_EMAIL        live-fire email recipient (default powerlim2@gmail.com).
-#                           Owner's own address only — never anyone else's.
+#                           accounts (default: simulated via fake binaries).
+#                           Must be set inline in the invoking environment;
+#                           a value from local.env alone is ignored. Never export.
+#   MOCHI_LIVE_FIRE_NONINTERACTIVE=1  allow live-fire without a TTY (default:
+#                           refused when stdin is not a TTY or $CI is set).
+#   MOCHI_TEST_EMAIL        live-fire email recipient (no default — required).
+#                           Must be the owner's own address; verified against
+#                           the Gmail profile before any send. Never anyone else's.
 #   MOCHI_TEST_MESSENGER_CID  live-fire Messenger target conversation id.
 #                           Must resolve to the owner's own chat (default:
 #                           auto-discovered); anything else fails closed.
 #
+# Usage: bin/leakage-audit [-h|--help]
 # Exit 0 = all checks pass (skips don't fail). Exit 1 = at least one FAIL.
+# Exit 2 = usage error or refused live-fire (environment, not findings).
 set -u
 
+case "${1:-}" in
+  -h|--help) sed -n '2,/^#$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+esac
+if [ $# -gt 0 ]; then echo "leakage-audit: unknown option: $1 (usage: bin/leakage-audit [-h|--help])" >&2; exit 2; fi
+
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Snapshot explicit environment so local.env can only supply defaults,
+# never override the operator's invocation (and never arm live-fire).
+_LIVE_FIRE_ENV="${MOCHI_LIVE_FIRE:-}"
+_saved_vars=()
+for _v in PERSONAL_MEMORY_SKILL PERSONAL_MEMORY_ROOT MOCHI_AGENTS_FILE \
+  MOCHI_CRON_PROMPT_DIRS MOCHI_EGRESS_LOG MOCHI_MEMORY_AUDIT MOCHI_LIVE_FIRE \
+  MOCHI_LIVE_FIRE_NONINTERACTIVE MOCHI_TEST_EMAIL MOCHI_TEST_MESSENGER_CID; do
+  if [ -n "${!_v+x}" ]; then _saved_vars+=("$_v=${!_v}"); fi
+done
 [ -f "$SKILL_DIR/local.env" ] && . "$SKILL_DIR/local.env"
+if [ "${#_saved_vars[@]}" -gt 0 ]; then
+  for _kv in "${_saved_vars[@]}"; do export "$_kv"; done
+fi
+unset _v _kv _saved_vars
 
 MEM_SKILL="${PERSONAL_MEMORY_SKILL:-$HOME/workspace/skills/personal-memory-system}"
 export PERSONAL_MEMORY_ROOT="${PERSONAL_MEMORY_ROOT:-$HOME}"
@@ -42,7 +69,21 @@ SHIMDIR="$MEM_SKILL/bin/shims"
 
 # Validation mode, labelled in the header, the summary, and the HTML report
 # so a reader never mistakes a simulated run for a live-fire one.
+# Live-fire is strictly per-invocation opt-in: it must be set inline in the
+# invoking environment. A MOCHI_LIVE_FIRE=1 that came only from local.env
+# is ignored with a loud warning — a stale file must never arm real sends.
+if [ "${_LIVE_FIRE_ENV:-}" != "1" ] && [ "${MOCHI_LIVE_FIRE:-}" = "1" ]; then
+  echo "leakage-audit: WARNING: MOCHI_LIVE_FIRE=1 came from local.env, not the invoking environment;" >&2
+  echo "leakage-audit: WARNING: ignoring it. Set MOCHI_LIVE_FIRE=1 inline to opt in per run." >&2
+  MOCHI_LIVE_FIRE=""
+fi
+unset _LIVE_FIRE_ENV
 if [ "${MOCHI_LIVE_FIRE:-}" = "1" ]; then
+  if { [ -n "${CI:-}" ] || [ ! -t 0 ]; } && [ "${MOCHI_LIVE_FIRE_NONINTERACTIVE:-}" != "1" ]; then
+    echo "leakage-audit: refusing live-fire in a non-interactive context (stdin is not a TTY or \$CI is set)." >&2
+    echo "leakage-audit: set MOCHI_LIVE_FIRE_NONINTERACTIVE=1 to override explicitly." >&2
+    exit 2
+  fi
   AUDIT_MODE="LIVE-FIRE (real sends to owner's own accounts; synthetic payloads only)"
   AUDIT_MODE_SHORT="LIVE-FIRE"
 else
@@ -83,8 +124,10 @@ ok()   { PASS=$((PASS+1)); wcheck "✓ $(shorten "$1")"; }
 # bad <name> [evidence] [suggestion] — every failure carries a concrete
 # suggested remediation. This skill validates and suggests; it never
 # applies fixes — remediation belongs to the memory skill / the agent.
-bad()  { FAIL=$((FAIL+1)); wcheck "✗ $(shorten "$1")"
-         FINDINGS="${FINDINGS}$(wcheck "✗ $(shorten "$1")")"$'\n'
+bad()  { FAIL=$((FAIL+1))
+         _blabel="$1"; [ -n "$SUITE_LETTER" ] && _blabel="[$SUITE_LETTER] $1"
+         wcheck "✗ $(shorten "$_blabel")"
+         FINDINGS="${FINDINGS}$(wcheck "✗ $(shorten "$_blabel")")"$'\n'
          if [ -n "${2:-}" ]; then
            printf '%s\n' "$2" | wdetail
            FINDINGS="${FINDINGS}$(printf '%s\n' "$2" | wdetail)"$'\n'
@@ -92,7 +135,8 @@ bad()  { FAIL=$((FAIL+1)); wcheck "✗ $(shorten "$1")"
          if [ -n "${3:-}" ]; then
            printf '%s\n' "Suggestion: $3" | wdetail
            FINDINGS="${FINDINGS}$(printf '%s\n' "Suggestion: $3" | wdetail)"$'\n'
-         fi; }
+         fi
+         unset _blabel; }
 skip() { SKIPPED=$((SKIPPED+1)); wcheck "– $(shorten "$1") [$(shorten "$2")]"; }
 
 begin_suite() { # <letter> <name>
@@ -203,7 +247,11 @@ else bad "adversarial corpus is empty — 0/0 would be a vacuous pass" "" "resto
 end_suite
 
 # ------------------------------------------------- B. red team (fake sends)
-begin_suite "B" "Gate effectiveness (red team, synthetic payloads)"
+if [ "$AUDIT_MODE_SHORT" = "LIVE-FIRE" ]; then
+  begin_suite "B" "Gate effectiveness (red team, LIVE-FIRE: real sends to own accounts)"
+else
+  begin_suite "B" "Gate effectiveness (red team, synthetic payloads)"
+fi
 T="$(mktemp -d)"
 LIVE_FIRE="${MOCHI_LIVE_FIRE:-}"
 if [ "$LIVE_FIRE" = "1" ]; then
@@ -212,6 +260,17 @@ if [ "$LIVE_FIRE" = "1" ]; then
   # Real sends go to the owner's own accounts ONLY (see below); payloads stay
   # synthetic. Drive share tests stay simulated — a live run must never
   # grant real access to anyone.
+  #
+  # Integrity: a stale MOCHI_REAL_* override (e.g. from local.env) would make
+  # a "live-fire" run exercise fake binaries while the report claims LIVE-FIRE.
+  # Refuse that confusion — unset them loudly.
+  for _rv in MOCHI_REAL_HATCH_GWS_CLI MOCHI_REAL_HATCH_MESSENGER_CLI; do
+    if [ -n "${!_rv:-}" ]; then
+      wdetail "LIVE-FIRE: unsetting stale $_rv (was: ${!_rv}) — live-fire must use the genuine CLIs."
+      unset "$_rv"
+    fi
+  done
+  unset _rv
   wdetail "LIVE-FIRE: real sends to the owner's own accounts; synthetic payloads only."
 else
   mkdir -p "$T/fakebin"
@@ -321,18 +380,34 @@ live_send_expect() { # <name> <want_rc> -- cmd...
   fi
 }
 
-LIVE_EMAIL="${MOCHI_TEST_EMAIL:-powerlim2@gmail.com}"
+LIVE_EMAIL="${MOCHI_TEST_EMAIL:-}"
 if [ -z "$LIVE_EMAIL" ]; then
-  bad "live-fire: no test email configured" "" "set MOCHI_TEST_EMAIL to the owner's own address (never anyone else's)."
+  bad "live-fire: no test email configured" "" "set MOCHI_TEST_EMAIL to the owner's own address (never anyone else's). There is no default."
 else
-  wdetail "live-fire target: $LIVE_EMAIL (owner's own address)"
-  MARK="leakage-audit live-fire $(date +%Y%m%d-%H%M%S)"
-  # Block-tier: the gate must refuse (rc=1), so the shim never invokes the real
-  # binary. If a block-tier test ever arrives in the inbox, that is a real
-  # finding — report it, do not re-run.
-  live_send_expect "gmail live-fire: secret blocked, nothing sent" 1 -- $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] block-tier test (synthetic)" --body "$(cat "$FIX/secret.txt")"
-  live_send_expect "gmail live-fire: clean delivered end-to-end" 0 -- $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] clean test (synthetic)" --body "$(cat "$FIX/clean.txt")"
-  live_send_expect "gmail live-fire: figure delivered with explicit approval" 0 -- env MOCHI_EGRESS_APPROVED=1 $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] approval-tier test (synthetic)" --body "$(cat "$FIX/figure.txt")"
+  # Verify the target belongs to the owner: the Gmail profile's address must
+  # match, case-insensitively. Fail closed on mismatch or when the identity
+  # cannot be determined — never trust the address blindly. (Read-only call;
+  # the shim passes non-send subcommands straight through to the real CLI.)
+  _profile_addr="$("$G" gmail users getProfile --params '{"userId":"me"}' --format json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("emailAddress",""))' 2>/dev/null)"
+  if [ -z "$_profile_addr" ]; then
+    bad "live-fire: cannot determine Gmail identity" "" "the getProfile check failed; refusing to send without verifying the target belongs to the owner."
+  elif [ "${_profile_addr,,}" != "${LIVE_EMAIL,,}" ]; then
+    bad "live-fire: target is not the owner's address" "MOCHI_TEST_EMAIL=$LIVE_EMAIL but the Gmail identity is $_profile_addr" "set MOCHI_TEST_EMAIL to the owner's own address (never anyone else's)."
+  else
+    wdetail "live-fire target: $LIVE_EMAIL (verified against the Gmail profile)"
+    MARK="leakage-audit live-fire $(date +%Y%m%d-%H%M%S)"
+    if [ -t 0 ]; then
+      wdetail "Sending 3 test emails to the owner's own address ($LIVE_EMAIL). Ctrl-C now to abort."
+      sleep 10
+    fi
+    # Block-tier: the gate must refuse (rc=1), so the shim never invokes the real
+    # binary. If a block-tier test ever arrives in the inbox, that is a real
+    # finding — report it, do not re-run.
+    live_send_expect "gmail live-fire: secret blocked, nothing sent" 1 -- $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] block-tier test (synthetic)" --body "$(cat "$FIX/secret.txt")"
+    live_send_expect "gmail live-fire: clean delivered end-to-end" 0 -- $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] clean test (synthetic)" --body "$(cat "$FIX/clean.txt")"
+    live_send_expect "gmail live-fire: figure delivered with explicit approval" 0 -- env MOCHI_EGRESS_APPROVED=1 $G gmail +send --to "$LIVE_EMAIL" --subject "[$MARK] approval-tier test (synthetic)" --body "$(cat "$FIX/figure.txt")"
+  fi
+  unset _profile_addr
 fi
 
 # Resolve the owner's own Messenger chat: a thread whose participants are all
@@ -356,20 +431,24 @@ for line in sys.stdin:
         cids[str(t.get("conversation_id"))]=parts
 if not self_id: sys.exit(0)
 wanted=sys.argv[1] if len(sys.argv)>1 else ""
+def self_only(parts):
+    # Exactly one participant and it is the owner. Group threads (even ones
+    # whose participant list renders incompletely) can never satisfy this.
+    return len(parts)==1 and parts[0]==self_id
 if wanted:
     parts=cids.get(wanted)
-    if parts and all(p==self_id for p in parts): print(wanted)
+    if parts and self_only(parts): print(wanted)
     else: sys.exit(2)
 else:
     for cid,parts in cids.items():
-        if parts and all(p==self_id for p in parts): print(cid); break
+        if parts and self_only(parts): print(cid); break
 ' "${MOCHI_TEST_MESSENGER_CID:-}")"; then
   if [ -n "$SELF_CID" ]; then
     wdetail "live-fire target: owner's own Messenger chat ($SELF_CID)"
     live_send_expect "messenger live-fire: clean delivered to self" 0 -- $M send --cid "$SELF_CID" --text-stdin < "$FIX/clean.txt"
     live_send_expect "messenger live-fire: secret blocked, nothing sent" 1 -- $M send --cid "$SELF_CID" --text-stdin < "$FIX/secret2.txt"
   else
-    skip "messenger live-fire: no owner-only chat found" "send yourself one message, then re-run"
+    bad "live-fire: no owner-only Messenger chat found" "the Messenger path was not exercised" "send yourself one message so an owner-only chat exists, then re-run. Live-fire fails closed on coverage loss — it never reports CLEAN for a path it did not test."
   fi
 else
   bad "live-fire: MOCHI_TEST_MESSENGER_CID does not resolve to the owner's own chat" "" "point it at the conversation id of a chat containing only the owner, or unset it for auto-discovery. Live-fire never sends to anyone but the owner."

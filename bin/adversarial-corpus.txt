@@ -27,7 +27,7 @@ card_bare|1|Card 4111111111111111 charged
 amex_15|1|Amex 378282246310005 charged
 fig_dollar|2|Budget is $12,500 per month
 fig_m|2|Valuation at $5M currently
-fig_week|2|Transfer $150/week automatically
+fig_week|2|Transfer $275/week automatically
 fig_decimal|2|It costs $19.99 per month
 phone_dash|2|Call 415-555-0132 after 6pm
 phone_paren|2|Call (415) 555-0132 after 6pm

@@ -55,8 +55,12 @@ MOCHI_EGRESS_LOG=/path/to/egress-gate.log bin/leakage-audit
 ```
 
 Exit 0 = all checks pass. Exit 1 = at least one check failed; the report
-names every failure. A report is printed to stdout; save it with
+names every failure. Exit 2 = usage error or a refused live-fire run
+(environment problem, not findings). A report is printed to stdout; save it with
 `bin/leakage-audit | tee reports/<date>.md`.
+
+`bin/leakage-audit -h` prints usage. Unknown arguments are rejected with
+exit 2, as is `bin/leakage-report --out` without a path.
 
 The report is responsive: it fits the terminal width (or
 `MOCHI_REPORT_WIDTH`, clamped to 40–76), wraps every line so nothing
@@ -87,5 +91,17 @@ summary table to a stacked layout on narrow screens.
   `~/workspace/skills/personal-memory-system`) and never duplicates
   their logic — it only verifies behavior.
 - Tests use fake "real" binaries (`MOCHI_REAL_*` overrides) so no test
-  ever sends anything anywhere.
+  ever sends anything anywhere — except the opt-in live-fire mode below,
+  which exercises the genuine path deliberately.
+- **Live-fire (opt-in, owner's installation only).**
+  `MOCHI_LIVE_FIRE=1 MOCHI_TEST_EMAIL=<own address> bin/leakage-audit`
+  sends a small synthetic subset for real, to the owner's own accounts
+  only. Guards: must be set inline per invocation (a `local.env` value is
+  ignored); refused without a TTY / under `$CI` unless
+  `MOCHI_LIVE_FIRE_NONINTERACTIVE=1`; the email target must match the
+  authenticated Gmail profile; the Messenger target must be an
+  owner-only chat (anything else fails closed); stale `MOCHI_REAL_*`
+  overrides are unset so a `LIVE-FIRE` run always means the genuine
+  binaries; Drive share tests stay simulated. Do not enable live-fire
+  during validation of changes — validate in simulated mode only.
 - All public examples are synthetic and impersonal, per policy.

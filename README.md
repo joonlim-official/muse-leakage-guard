@@ -145,9 +145,10 @@ personal paths are baked into the skill:
 | `PERSONAL_MEMORY_ROOT` | memory root passed through to the gates | `~` |
 | `MOCHI_CRON_PROMPT_DIRS` | dirs whose cron prompts must wire the shim `PATH` | unset (check skipped) |
 | `MOCHI_MEMORY_AUDIT` | set to `1` to include the memory skill's own audit | `0` |
-| `MOCHI_LIVE_FIRE` | set to `1` for live-fire mode (see below) | unset (simulated) |
-| `MOCHI_TEST_EMAIL` | live-fire email recipient — owner's own address only | `powerlim2@gmail.com` |
-| `MOCHI_TEST_MESSENGER_CID` | live-fire Messenger target — must resolve to the owner's own chat | auto-discovered |
+| `MOCHI_LIVE_FIRE` | set to `1` for live-fire mode (see below); must be set inline in the invoking environment — a value from `local.env` alone is ignored | unset (simulated) |
+| `MOCHI_LIVE_FIRE_NONINTERACTIVE` | set to `1` to allow live-fire without a TTY (CI/automation); without it, non-interactive live-fire is refused | unset (refused) |
+| `MOCHI_TEST_EMAIL` | live-fire email recipient — owner's own address only, verified against the Gmail profile before any send | **required** (no default) |
+| `MOCHI_TEST_MESSENGER_CID` | live-fire Messenger target — must resolve to an owner-only chat | auto-discovered |
 
 All test fixtures and corpus payloads are synthetic and impersonal —
 shaped to trip the detectors, belonging to nobody. Never put real
@@ -160,17 +161,24 @@ ever really leaves the machine. Live-fire exercises the genuine
 end-to-end path (shim → gate → real binary) with real sends:
 
 ```bash
-MOCHI_LIVE_FIRE=1 bin/leakage-audit
+MOCHI_LIVE_FIRE=1 MOCHI_TEST_EMAIL=<your own address> bin/leakage-audit
 ```
 
 Rules, enforced by design:
 
-- **Opt-in only.** Unset or empty `MOCHI_LIVE_FIRE` keeps today's
-  fake-binary behavior — safe for CI and external contributors. Live-fire
-  is never the default.
-- **Sends go to the owner only, ever.** The email target defaults to the
-  owner's own address (`MOCHI_TEST_EMAIL`); the Messenger target is
-  auto-discovered as a chat containing only the owner, and an explicit
+- **Opt-in only, per invocation.** `MOCHI_LIVE_FIRE=1` must be set inline
+  in the invoking environment — a value from `local.env` alone is ignored
+  with a warning, so a stale config file can never arm real sends. Never
+  export it. Without it, today's fake-binary behavior applies — safe for
+  CI and external contributors. Live-fire is never the default.
+- **No silent automation.** If stdin is not a TTY or `$CI` is set,
+  live-fire is refused unless `MOCHI_LIVE_FIRE_NONINTERACTIVE=1` is also
+  set explicitly — scheduled audits stay simulated.
+- **Sends go to the owner only, ever.** `MOCHI_TEST_EMAIL` is required
+  (there is no default) and must match the authenticated Gmail profile's
+  address — the run fails closed on mismatch or when the identity cannot
+  be determined. The Messenger target is auto-discovered as a chat whose
+  *only* participant is the owner, and an explicit
   `MOCHI_TEST_MESSENGER_CID` that does not resolve to such a chat fails
   closed. Never point these variables at someone else's address.
 - **Payloads stay synthetic.** The same fixtures as the simulated suite —
@@ -178,7 +186,12 @@ Rules, enforced by design:
 - **Small subset.** One block-tier, one approval-tier (explicit
   `MOCHI_EGRESS_APPROVED=1`), and one clean send per channel — not the
   full suite, to avoid inbox spam. Drive share tests stay simulated: a
-  live run must never grant real access to anyone.
+  live run must never grant real access to anyone. When stdin is a TTY,
+  the run pauses 10 seconds before the first real send — Ctrl-C aborts.
+- **Live-fire means the genuine binaries.** Any stale
+  `MOCHI_REAL_*_CLI` override is unset with a warning in the live-fire
+  branch — a run that claims `LIVE-FIRE` must exercise the real path, not
+  fake delegates.
 - **Block-tier assertions are unchanged:** exit 1, and the real binary is
   never invoked. If a block-tier test ever arrives in your inbox, that is
   a real finding — report it, do not re-run.

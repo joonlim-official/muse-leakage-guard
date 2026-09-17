@@ -13,10 +13,20 @@
 #   PERSONAL_MEMORY_SKILL   memory skill under test
 #                           (default ~/workspace/skills/personal-memory-system)
 # Exit: 0 = every case matched, 1 = at least one mismatch (listed).
+# Exit 2 = usage error.
 set -u
 
+case "${1:-}" in
+  -h|--help) sed -n '2,/^#$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+esac
+if [ $# -gt 0 ]; then echo "adversarial-run: unknown option: $1 (usage: bin/adversarial-run [-h|--help])" >&2; exit 2; fi
+
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Explicit environment wins over local.env (same precedence as leakage-audit).
+if [ -n "${PERSONAL_MEMORY_SKILL+x}" ]; then _pms="$PERSONAL_MEMORY_SKILL"; fi
 [ -f "$SKILL_DIR/local.env" ] && . "$SKILL_DIR/local.env"
+if [ -n "${_pms+x}" ]; then PERSONAL_MEMORY_SKILL="$_pms"; fi
+unset _pms
 MEM_SKILL="${PERSONAL_MEMORY_SKILL:-$HOME/workspace/skills/personal-memory-system}"
 GATE="$MEM_SKILL/bin/memory-egress-check"
 CORPUS="$SKILL_DIR/bin/adversarial-corpus.txt"
