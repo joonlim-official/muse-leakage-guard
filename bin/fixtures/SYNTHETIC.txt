@@ -1,0 +1,20 @@
+# SYNTHETIC.txt — every secret-shaped token in bin/fixtures/ and
+# bin/adversarial-corpus.txt must be listed here, one per line.
+# All values below are synthetic test shapes (belonging to nobody),
+# extracted from the tree on 2026-09-17 and verified against the
+# egress denylist (no real private literals present).
+#
+# To add a new fixture value: add its secret-shaped tokens here FIRST,
+# get them reviewed as synthetic, then use them in fixtures.
+
+123-45-6789
+4111 1111 1111 1111
+4111-1111-1111-1111
+AIzaSyA-abcdefghijklmnopqrstuvw12
+BEGIN EC PRIVATE KEY
+BEGIN FAKE PRIVATE KEY
+BEGIN RSA PRIVATE KEY
+ghp_abcdefghij1234567890abcdefgh
+sk_live_4eC39HqLyjWDarjtT1z
+sk_test_BQokikJOvBiI2HlWgH4o
+xoxb-12345-67890-AbCdEfGhIjKlMnOpQrStUvWx

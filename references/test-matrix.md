@@ -44,6 +44,7 @@ belonging to nobody.
 | `references/data-protection.md` defines free-share zones | the boundary (what's free vs. gated) is written down |
 | cron prompt dirs contain the shim PATH export | scheduled workers inherit interception |
 | `memory-audit` green (opt-in via `MOCHI_MEMORY_AUDIT=1`) | no private data already sitting where it shouldn't |
+| every secret-shaped token in fixtures/corpus declared in `bin/fixtures/SYNTHETIC.txt` | the denylist catches the user's real literals; this catches any *other* undeclared secret-shaped value before it ships in a public fixture |
 
 ## D. Audit-log review
 

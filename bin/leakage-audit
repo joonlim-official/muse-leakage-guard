@@ -334,6 +334,22 @@ if [ -s "$DENYLIST" ]; then
   rm -f "$deny_tmp"
 else skip "no egress denylist" "$DENYLIST missing or empty"; fi
 
+# Fixture purity: every secret-shaped token in fixtures/corpus must be a
+# declared synthetic value in bin/fixtures/SYNTHETIC.txt. The denylist
+# check above catches the user's real literals; this catches any other
+# undeclared secret-shaped value before it can ship in a public fixture.
+SYNTH="$SKILL_DIR/bin/fixtures/SYNTHETIC.txt"
+SHAPES='[0-9]{3}-[0-9]{2}-[0-9]{4}|[0-9]{4}[- ][0-9]{4}[- ][0-9]{4}[- ][0-9]{4}|sk_(live|test)_[A-Za-z0-9]+|xox[bpas]-[A-Za-z0-9-]+|AIza[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|BEGIN [A-Z ]*PRIVATE KEY'
+if [ -f "$SYNTH" ]; then
+  undeclared=""
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    grep -qxF "$tok" "$SYNTH" || undeclared="${undeclared}${tok} "
+  done < <(grep -hoE "$SHAPES" "$SKILL_DIR"/bin/fixtures/*.txt "$SKILL_DIR/bin/adversarial-corpus.txt" 2>/dev/null | sort -u)
+  if [ -n "$undeclared" ]; then bad "undeclared secret-shaped fixture values" "$undeclared" "declare each value as synthetic in bin/fixtures/SYNTHETIC.txt (after review), or remove it, then re-run this audit."
+  else ok "all secret-shaped fixture values are declared synthetic"; fi
+else bad "bin/fixtures/SYNTHETIC.txt missing" "" "restore it from the repo, then re-run this audit."; fi
+
 end_suite
 
 # ------------------------------------------------------------- D. gate log
