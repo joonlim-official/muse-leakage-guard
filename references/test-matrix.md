@@ -47,8 +47,15 @@ path (shim → gate → real binary), sends to the owner's own accounts only.
 | `{"raw": ...}` on stdin → raw `users messages send` | blocked (card) / allowed (clean) | the stdin form is gated exactly like the `--params` form; on allow the original stdin bytes are replayed byte-identical |
 | secret → gmail `+send --draft` | passes through | drafts (never leave the account) are correctly NOT gated |
 | secret body → gmail `+send --subject --draft` | blocked | a flag-looking value is gated content, not a draft flag — it must not skip the gate |
+| secret body → gmail `+reply-all` / `+forward` | blocked | all send subcommands are covered, not just `+send`; `+forward` stays contract-covered via a regression check |
+| secret → gmail `+send --body -- <body>` | blocked | a literal `--` ends option parsing but not gating; post-`--` positionals are gated as message content |
+| secret draft body → gmail `users drafts send` | blocked, send never invoked | draft creation is ungated by design; the send step fetches the draft read-only, decodes its body, and gates it |
+| clean draft body → gmail `users drafts send` | allowed, sent | the read-only fetch is not a send; the actual send proceeds only when the decoded body is clean |
+| gmail settings `updateAutoForwarding` (mutating) | refused (2); allowed with approval | settings-plane mutations redirect where mail goes; reads (`getAutoForwarding`) pass through |
 | secret → messenger `send` via stdin | blocked, real binary silent | stdin capture + gate compose correctly |
 | clean → messenger `send` | allowed, stdin replayed byte-identical | the gate doesn't corrupt legitimate sends |
+| secret → messenger `edit` | blocked | edits are sends; covered like `send` |
+| secret → messenger `send --text -- <text>` | blocked | the `--` rule applies to the messenger shim too |
 | drive `permissions create` | refused (2); allowed with approval | sharing with others is never a free-share zone; the match is positional (subcommand), so `drive files create --name permissions` is not refused |
 | drive `files list`, gmail `+triage` | pass through | reads and own-Drive ops are untouched |
 | *(live-fire only)* secret → gmail `+send` to owner's own address | exit 1, nothing arrives | block-tier holds on the genuine end-to-end path |
@@ -97,6 +104,13 @@ without a mapped check is a finding, not an oversight.
 | A6 Messenger send/edit | APPROVAL-GATED | B: messenger send secret blocked; clean passes; stdin replayed byte-identical |
 | A7 cron job without shim PATH | POLICY-ONLY | C: cron prompt dirs must wire the shim PATH export — static/syntactic check: it proves the mandate text is in the prompt files, not that workers honored it at runtime |
 | A8 absolute-path shim bypass | POLICY-ONLY | E: restated as residual every run |
+| A9 reply-all/forward recipient expansion | PROTECTED | B: `+reply-all` secret blocked / clean allowed; `+forward` secret blocked / clean allowed (regression) |
+| A10 `--` parser bypass | PROTECTED | B: post-`--` body blocked (Gmail and Messenger) |
+| A11 draft sent later (`users drafts send`) | PROTECTED | B: secret draft blocked (send never invoked), clean draft sent; unfetchable draft refuses closed |
+| A12 Gmail settings-plane mutations | APPROVAL-GATED | B: `updateAutoForwarding` refused w/o approval, allowed with it; read-only gets pass through |
+| A13 detector failure | PROTECTED | A: crashing (rc=3) and killed (rc=137) detectors fail closed (rc=1) on both gates, stub and real targets |
+| A14 `messages import`/`insert` | OPEN GAP | E: restated as residual — not gated; only send/update paths are intercepted |
+| A15 chat/calendar/settings-plane beyond Gmail settings | OPEN GAP | E: restated as residual — no shim coverage |
 | B1 Drive file shared externally | APPROVAL-GATED | B: `drive permissions create` refused w/o approval, allowed with it; `drive files list` passes (free zone) |
 | B2 public Git push with private data | POLICY-ONLY | C: tracked files of both public repos scanned against the egress denylist |
 | B3 shared artifact with private data | POLICY-ONLY | C: denylist scan catches secret-shaped / denylisted-literal content in public repo files; it CANNOT see private figures (synthetic figures are declared allowed) — a figure in a shared artifact is an open gap within this POLICY-ONLY verdict |

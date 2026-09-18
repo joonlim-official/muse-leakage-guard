@@ -83,30 +83,6 @@ the block-set builder concatenated corpus cases without separators, so
 greedy shape patterns fused adjacent tokens into hashes that never occur
 at runtime (3 mismatches) — now hashed per line.
 
-## Iteration 6 — CI fails honest
-Theme: the CI workflow tells the truth in both colors — fail-at-the-end
-with rc-file capture, hermetic delegates, sentinel-based summary, and a
-corrected 4-skip pin (the old 2-skip pin meant CI could never be green).
-- Fail-at-the-end: every component step `if: always()` (guarded by both
-  refuse-step outcomes), rc files, final assert-green step owns the job
-  outcome; red runs still produce logs, report, artifact, and a summary
-  naming the red components.
-- Hermetic delegates in `${{ runner.temp }}/delegates` (no sudo, no
-  /usr/local/bin); PATH-lookup smoke test.
-- Adversarial exit code preserved via `PIPESTATUS[0]`; new `@@@ ADV`
-  machine sentinels (MATCHED / TIERS / MISMATCH) parsed by the summary
-  and the report (sentinel-first, regex fallback).
-- Summary rebuilt on anchored `@@@` sentinels: explicit Outcome word
-  (CLEAN/ATTENTION/INCOMPLETE/BLOCKED), per-component table, missing
-  sentinels render "unavailable". Dead `block-tier recall` grep removed.
-- Timeout hardening: `timeout -k` on all gate invocations; report wraps
-  subprocesses in `timeout -k 10 600`; per-step `timeout-minutes`.
-  Fixed the report's `$?`-after-`if !` exit-code capture bug.
-Validation: stub audit 60 passed / 0 failed / 1 skipped (local) and 57 /
-0 / 4 (CI-equivalent fresh HOME); adversarial 36/36; forced-red audit
-→ report rc=1 with file written; forced adversarial mismatch →
-sentinel flows to report ATTENTION; summary ATTENTION on red logs.
-
 ## Iteration 5 — Honest green
 Theme: the report tells the truth about what green means — tri-state
 verdicts, fixture-conformance language, and statistical humility.
@@ -154,6 +130,122 @@ targets (block 19/19, review 9/9, clean 8/8); `build-blockset.sh
 --check` current; `bash -n` on all touched scripts; forced-failure run
 verified red report (exit 1, ATTENTION badge, findings with evidence
 links, off-diagonal confusion matrix); desktop + mobile screenshot QA.
+
+## Iteration 6 — CI fails honest
+Theme: the CI workflow tells the truth in both colors — fail-at-the-end
+with rc-file capture, hermetic delegates, sentinel-based summary, and a
+corrected 4-skip pin (the old 2-skip pin meant CI could never be green).
+- Fail-at-the-end: every component step `if: always()` (guarded by both
+  refuse-step outcomes), rc files, final assert-green step owns the job
+  outcome; red runs still produce logs, report, artifact, and a summary
+  naming the red components.
+- Hermetic delegates in `${{ runner.temp }}/delegates` (no sudo, no
+  /usr/local/bin); PATH-lookup smoke test.
+- Adversarial exit code preserved via `PIPESTATUS[0]`; new `@@@ ADV`
+  machine sentinels (MATCHED / TIERS / MISMATCH) parsed by the summary
+  and the report (sentinel-first, regex fallback).
+- Summary rebuilt on anchored `@@@` sentinels: explicit Outcome word
+  (CLEAN/ATTENTION/INCOMPLETE/BLOCKED), per-component table, missing
+  sentinels render "unavailable". Dead `block-tier recall` grep removed.
+- Timeout hardening: `timeout -k` on all gate invocations; report wraps
+  subprocesses in `timeout -k 10 600`; per-step `timeout-minutes`.
+  Fixed the report's `$?`-after-`if !` exit-code capture bug.
+Validation: stub audit 60 passed / 0 failed / 1 skipped (local) and 57 /
+0 / 4 (CI-equivalent fresh HOME); adversarial 36/36; forced-red audit
+→ report rc=1 with file written; forced adversarial mismatch →
+sentinel flows to report ATTENTION; summary ATTENTION on red logs.
+
+## Iteration 7 — Contract conformance
+Theme: the stub honors its contract; the audit enforces what the
+contract claims; the catalog and matrix say only what the suites
+enforce.
+- Stub: GWS shim gates the stdin form of raw MIME (was ungated
+  fail-open); stdin bytes replayed byte-identical on allow;
+  `--draft`/`--dry-run` honored only as flags, never as flag values
+  (token-confusion bypass closed); drive `permissions create` matched
+  positionally (no anywhere-token false positives); canonicalized
+  delegate resolution + self-identity refusal (fail closed);
+  `+send` gates `to` as well as subject/body; `memory-egress-check`
+  operational failures exit 1 (fail closed, never approvable).
+- Audit: suite A enforces `interface_version` as the first check
+  (mismatch → one FAIL, ATTENTION, exit 1); distinct-delegate assertion
+  by canonical path identity; stub-only operational-failure approval
+  isolation; suite B pins stdin-form blocked/clean, draft
+  token-confusion, positional drive-match; live-fire sends wrapped in
+  `timeout -k 10 30`.
+- Docs: `gate-interface.md` gains machine-readable `contract_version:
+  1`; `attack-surface.md` C5 qualified (shimmed paths only), A7 marked
+  POLICY-ONLY, KNOWN GAP defined; `test-matrix.md` Covered-by
+  corrections; README residual list all ten, matching suite E.
+Validation: stub + real audit CLEAN; adversarial 36/36 both targets;
+`build-blockset.sh --check` current; `bash -n` all touched scripts.
+
+## Iteration 8 — Report integrity and readability
+Theme: the report tells the truth in plain language and is readable by
+everyone, including keyboard and screen-reader users.
+- Badge integrity: CLEAN requires audit CLEAN + adversarial rc 0 +
+  parseable figures; a runner exiting 0 without figures renders
+  ATTENTION, not CLEAN.
+- Card B (gate effectiveness): tri-state callout — N blocked outright ·
+  N protected through approval · N allowed normally — so rc=2
+  approval-gated checks are never reported as plain green; evidence
+  grouped under 🟢/🟡/⚪ labels.
+- Card D (gate audit-log review): gate-log context rendered as evidence,
+  matching the card's promise.
+- Card E (known gaps): each residual gets a plain-language gloss with the
+  technical note retained; "N tracked · 0 hidden".
+- Plain language: invoked=0/1 → "real tool never called"/"delivered
+  normally"; CLEAN/ATTENTION/INCOMPLETE defined under the badge; local
+  time with UTC original; known-gap jargon glossed.
+- Adversarial card: runner-only mismatches as labeled drift rows; matrix
+  corner "expected vs actual"; "Worst case consistent with these results
+  (95% lower bound)" replaces the unexplained Clopper-Pearson label.
+- Accessibility: skip link, h2-wrapped card headings, red cards
+  pre-expanded server-side (no-JS fallback CSS), keyboard-focusable
+  scroll regions and transcripts, unique finding link labels, focus
+  styles, light/dark link colors, labeled "Overall result" total.
+- Adversarial runner: timeout failures count in the expected tier's
+  denominator (no disappearing from tier totals).
+Validation: stub + real audit CLEAN; adversarial 36/36 both targets;
+forced ATTENTION paths verified in the report renderer.
+
+## Iteration 9 — Fail-closed gates + red-team coverage of critical send paths
+Theme: every way a send could dodge the gate is now closed, tested, and
+pinned — abnormal detector exits fail closed, and every critical send
+path (reply-all, forward, `--`, drafts send, settings mutations,
+messenger edit) is red-teamed with fake delegates.
+- Protection layer (muse-memory, pushed separately): egress/brief gates
+  fail closed on abnormal detector exits (rc outside {0,1,2} → rc=1,
+  never 2); Gmail `+reply-all` gated; post-`--` positionals gated;
+  `users drafts send` fetches the draft read-only, decodes its body,
+  and gates it (unfetchable draft refuses closed); settings mutations
+  (auto-forwarding, delegates, filters, send-as) approval-gated;
+  undecodable raw MIME refuses closed; Messenger post-`--` gated.
+- Audit: fail-closed probes (crashing rc=3 / killed rc=137 detectors) on
+  both gates, every target; reply-all/forward/`--`/drafts-send/settings/
+  messenger-edit probes; fake delegate supports read-only drafts-get with
+  separate fetch/send sentinels; gate-decision logging mechanically
+  asserted (suite B); memory-audit findings and suite-D contexts reduced
+  to counts (evidence hygiene); empty gate log warns instead of passing
+  silently; `WARNINGS` machine sentinel end-to-end.
+- Stub: both gates now log every decision (contract requirement), so the
+  logging assertion is testable against the stub too.
+- Report: `[B] [B]` double-prefix fixed; ATTENTION-via-adversarial always
+  ships a finding (no empty Findings section); skipped checks no longer
+  double-counted as "other" in the gate-effectiveness callout; warnings
+  shown in the hero; UTC parenthetical dropped when the reader is in UTC.
+- CI: composition pinned — `@@@ TOTAL 83 0 4` and `@@@ ADV MATCHED 36/36`
+  asserted, so deleting checks or corpus cases cannot stay green.
+- Docs: gate-interface.md pins the new paths and fail-closed rule;
+  attack-surface.md gains A9–A13 and names import/insert and
+  chat/calendar as open gaps; test-matrix.md and README/suite-E
+  residuals converged; ITERATIONS.md reordered (5 before 6) and gained
+  the missing 7 and 8.
+Validation: stub audit 86/0/1 CLEAN, real audit 82/0/5 CLEAN;
+adversarial 36/36 both targets (block 19/19, review 9/9, clean 8/8);
+`build-blockset.sh --check` current; `bash -n` all touched scripts;
+report regenerated and screenshot-QA'd (desktop + mobile); real gate
+log verified unpolluted by validation runs.
 
 ## Backlog (iterations 6–10)
 - ~~Measurement rigor: confusion-matrix framing, KNOWN-GAP markers~~ (done, iteration 5)

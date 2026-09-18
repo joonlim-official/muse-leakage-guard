@@ -92,6 +92,9 @@ catalog's A/B/C/D/E scenario IDs.
 - Bare 9-digit SSN shapes are flagged (deliberately conservative) — false-positive risk documented as scenario E3 in the catalog
 - Attachment/binary inspection: open gap (B4) — attachments are not unpacked or scanned
 - Nested/part-level encodings inside MIME: the shim decodes the outer `raw` once; a secret inside a base64 MIME part (or any non-base64 encoding) is not decoded — known gap
+- `gmail messages import` / `messages insert`: NOT gated (open gap) — only send/update paths are intercepted
+- Chat/calendar/settings-plane beyond Gmail settings mutations: no shim coverage (open gap)
+- Malformed/undecodable raw-MIME send: refuses closed (the malformed mail is dropped, not leaked) — the trade-off is visible by design
 
 ## What a real run reports
 

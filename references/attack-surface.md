@@ -102,6 +102,54 @@ Verdict key:
   require moving system binaries, out of scope. Reported as a residual on
   every audit run.
 
+### A9. Reply-all / forward expanding the recipient set
+- **Scenario:** `+reply-all` and `+forward` are sends like `+send`, but were
+  historically unlisted and untested — an unlisted send path is a bypass
+  candidate.
+- **Conclusion:** PROTECTED
+- **Details:** The shim routes `+reply-all` through the same gate as
+  `+send`; `+forward` stays contract-covered and is regression-tested.
+  Verified by red-team: secret blocked, clean allowed, for both.
+
+### A10. `--` end-of-options parser bypass
+- **Scenario:** A caller puts `--` before the body so the shim's option
+  parser stops early and the content is treated as a positional — potentially
+  skipping the gate.
+- **Conclusion:** PROTECTED
+- **Details:** A literal `--` ends option parsing but does not end gating:
+  post-`--` positionals are collected as message content and gated like any
+  body, in both the Gmail and Messenger shims. Verified by red-team.
+
+### A11. Gmail draft sent later (`users drafts send`)
+- **Scenario:** Draft creation is deliberately ungated (A5); the protection
+  must therefore live at the send step, where the draft's body is the actual
+  payload.
+- **Conclusion:** PROTECTED
+- **Details:** The shim fetches the draft read-only, base64-decodes its
+  body, and gates the decoded content before delegating. A draft that
+  cannot be fetched refuses closed. Verified by red-team with a fake
+  read-only fetch: secret draft blocked (send never invoked), clean draft
+  delivered. Not covered: `messages import` / `messages insert` (see suite E).
+
+### A12. Gmail settings-plane mutations
+- **Scenario:** Auto-forwarding, delegates, filters, or send-as identities
+  redirect where mail goes — a subtler exfiltration channel than a send.
+- **Conclusion:** APPROVAL-GATED
+- **Details:** The shim refuses (rc=2) settings mutations involving
+  `updateAutoForwarding`, delegates, filters, or send-as unless approved.
+  Read-only settings gets pass through. Verified by red-team both
+  directions.
+
+### A13. Detector failure fails closed
+- **Scenario:** The detector binary crashes, is killed, or is missing — and
+  the gate misreads "no verdict" as clean.
+- **Conclusion:** PROTECTED
+- **Details:** Any detector exit outside {0,1,2} surfaces rc=1 (blocked),
+  never 0 and never 2 (a broken detector must not be approvable).
+  Verified by the audit on both gates, against both the synthetic stub and
+  the real installation, with crashing (rc=3) and killed (rc=137)
+  detectors.
+
 ---
 
 ## B. Sharing and publishing
@@ -313,5 +361,9 @@ The paths that remain POLICY-ONLY or OPEN by construction: A8
 every audit run (suite E): compositional/chunked exfiltration across
 calls (the gate judges each send in isolation), out-of-band egress via
 curl, webhooks, or unshimmed CLIs (only shimmed send paths are gated),
-and the bare nine-digit SSN false-positive trade-off (E3). Every audit
-run re-reports these so they stay visible instead of silently accepted.
+the bare nine-digit SSN false-positive trade-off (E3),
+`gmail messages import`/`messages insert` (not gated — open gap),
+chat/calendar/settings-plane beyond Gmail settings mutations (no shim
+coverage — open gap), and the malformed raw-MIME trade-off (refuses
+closed: the malformed mail is dropped, not leaked). Every audit run
+re-reports these so they stay visible instead of silently accepted.

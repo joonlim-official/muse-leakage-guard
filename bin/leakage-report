@@ -97,7 +97,7 @@ def parse_machine(lines):
                 cur["checks"][-1]["ev"].append(ctext)
             else:
                 cur["ctx"].append(ctext)
-        elif body.startswith(("TOTAL ", "VERDICT ", "MODE ", "TARGET ", "TS ", "STUBKIND ")):
+        elif body.startswith(("TOTAL ", "VERDICT ", "MODE ", "TARGET ", "TS ", "STUBKIND ", "WARNINGS ")):
             k, v = body.split(" ", 1)
             meta[k] = v
     return suites, meta
@@ -152,6 +152,9 @@ def parse_legacy(lines):
           or re.search(r"Total: (\d+) passed \u00b7 (\d+) failed \u00b7 (\d+) skipped", text))
     if tm:
         meta["TOTAL"] = " ".join(tm.groups())
+    wm = re.search(r"^  Warnings: (\d+)", text, re.M)
+    if wm:
+        meta["WARNINGS"] = wm.group(1)
     vm = re.search(r"VERDICT: (CLEAN|ATTENTION)", text)
     if vm:
         meta["VERDICT"] = "VERDICT: " + vm.group(1)
@@ -221,7 +224,8 @@ else:
 
 clean = (verdict_word == "CLEAN" and adv_rc == 0 and adv is not None)
 badge_word = verdict_word if verdict_word in ("CLEAN", "ATTENTION") else "INCOMPLETE"
-if (adv_rc != 0 or adv is None) and badge_word == "CLEAN":
+adv_flipped = (adv_rc != 0 or adv is None) and badge_word == "CLEAN"
+if adv_flipped:
     # The audit was green but the adversarial suite mismatched — or the
     # runner exited 0 without emitting parseable figures: the badge must
     # not say CLEAN. ATTENTION, with the red F card auto-expanded.
@@ -239,14 +243,19 @@ def plain_evidence(s):
     return s
 
 def fmt_ts(ts):
-    # "2026-09-18 00:04 UTC" -> local time plus the UTC original.
+    # "2026-09-18 00:04 UTC" -> local time; the UTC original is appended only
+    # when the reader is in a different zone (otherwise it's redundant).
     try:
         from datetime import datetime, timezone
         m = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})", ts)
         if not m:
             return ts
         dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-        return dt.astimezone().strftime("%Y-%m-%d %-I:%M %p %Z") + f" ({m.group(1)} UTC)"
+        local = dt.astimezone()
+        out = local.strftime("%Y-%m-%d %-I:%M %p %Z")
+        if local.utcoffset() and local.utcoffset().total_seconds() != 0:
+            out += f" ({m.group(1)} UTC)"
+        return out
     except Exception:
         return ts
 
@@ -384,9 +393,19 @@ for s in suites:
             # All evidence lines, not just the first — suggestions and
             # context after ev[0] must not be silently dropped.
             ev = "<br>".join(html.escape(plain_evidence(e)) for e in c["ev"])
-            findings.append((f"[{s['letter']}] {scrub(c['text'])}", ev, s["letter"]))
+            t = scrub(c["text"])
+            # The audit already prefixes "[$SUITE_LETTER]" on failures; don't
+            # double it here.
+            if not re.match(r"^\[[A-E]\] ", t):
+                t = f"[{s['letter']}] {t}"
+            findings.append((t, ev, s["letter"]))
 for name, want, got in mismatches:
     findings.append((f"[F] adversarial mismatch {name}: want rc={want}, got rc={got}", "", "F"))
+# If the badge was flipped to ATTENTION by the adversarial path yet no
+# finding exists, the hero points at an empty Findings section — synthesize
+# one so "see Findings" is never a dead end.
+if adv_flipped and not findings:
+    findings.append(("[F] adversarial suite did not verify — see transcript", "", "F"))
 
 cards = []
 def ev_item(c):
@@ -406,9 +425,13 @@ def ev_list(checks):
 def tri_state_groups(checks):
     # Suite B only: split evidence into hard-block (rc=1), approval-gated
     # (rc=2), and pass-through (rc=0) so the report never mixes the two
-    # protection tiers in one undifferentiated list.
+    # protection tiers in one undifferentiated list. Skipped checks are
+    # excluded: they are reported separately in the callout tail, and
+    # counting them as "other" would double-count them.
     block, gated, passthru, other = [], [], [], []
     for c in checks:
+        if c["st"] == chr(0x2013):
+            continue
         m = re.search(r"rc=(\d)", c["text"])
         rc = m.group(1) if m else None
         if rc == "1":
@@ -647,6 +670,12 @@ if gh_run:
     ci_span = (f'<span>CI run: <a href="{html.escape(gh_url, quote=True)}">'
                f'{html.escape(gh_repo)} #{html.escape(gh_run)}</a> ({html.escape(gh_sha)})</span>')
 stub_span = '<span><strong>target-kind: SYNTHETIC STUB</strong></span>' if stub else ""
+warn_n = 0
+try:
+    warn_n = int(meta.get("WARNINGS", "0"))
+except ValueError:
+    warn_n = 0
+warn_span = f'<span>⚠ {warn_n} warning(s)</span>' if warn_n > 0 else ""
 footer_text = ("Synthetic stub target \u2014 this report validates the harness against the bundled test double, "
                "not any real installation. Synthetic payloads only \u2014 nothing real was sent or disclosed."
                if stub else
@@ -771,7 +800,7 @@ footer{{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}}
   <p class="tech">muse-leakage-guard \u00b7 bin/leakage-audit + bin/adversarial-run</p>
   <span class="badge {"ok" if clean else "bad"}">{badge_word}</span>
   <p class="verdictdef">{html.escape(verdict_def)}</p>
-  <div class="meta"><span>{html.escape(fmt_ts(ts))}</span><span class="tgt">target: {html.escape(tgt)}</span>{stub_span}{ci_span}</div>
+  <div class="meta"><span>{html.escape(fmt_ts(ts))}</span><span class="tgt">target: {html.escape(tgt)}</span>{stub_span}{ci_span}{warn_span}</div>
 </header>
 <div class="modebar {modebar[0]}">{modebar[1]}</div>
 {stubbar}

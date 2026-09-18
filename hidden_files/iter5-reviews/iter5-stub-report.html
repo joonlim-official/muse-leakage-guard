@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leakage validation — CLEAN (synthetic stub)</title>
+<style>
+:root{--bg:#f6f7f9;--fg:#1c1e21;--card:#fff;--mut:#6b7280;--ok:#15803d;--bad:#b91c1c;
+--line:#e5e7eb;--hero1:#0f172a;--hero2:#1e3a5f}
+@media(prefers-color-scheme:dark){:root{--bg:#0b0d10;--fg:#e8eaed;--card:#15181d;
+--mut:#9aa0a6;--ok:#4ade80;--bad:#f87171;--line:#2a2e35;--hero1:#020617;--hero2:#0c1a33}}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+background:var(--bg);color:var(--fg);line-height:1.5}
+.hero{background:linear-gradient(135deg,var(--hero1),var(--hero2));color:#fff;padding:28px 20px}
+.hero h1{margin:0 0 4px;font-size:1.35rem}.hero p{margin:2px 0;color:#cbd5e1;font-size:.85rem}
+.badge{display:inline-block;margin-top:10px;padding:6px 16px;border-radius:999px;font-weight:700;
+letter-spacing:.08em;font-size:.85rem}
+.badge.ok{background:#166534}.badge.bad{background:#991b1b}
+.meta{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:.8rem;color:#cbd5e1}
+.modebar{padding:10px 20px;font-size:.85rem;border-bottom:1px solid var(--line)}
+.modebar.sim{background:#e2e8f0;color:#1e3a5f}
+.modebar.live{background:#ffedd5;color:#7c2d12}
+.modebar.unknown{background:#fef3c7;color:#92400e}
+@media(prefers-color-scheme:dark){
+.modebar.sim{background:#1e293b;color:#cbd5e1}
+.modebar.live{background:#431407;color:#fed7aa}
+.modebar.unknown{background:#451a03;color:#fde68a}}
+.wrap{max-width:640px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--mut);
+border-radius:12px;padding:0;margin:12px 0}
+.card.ok{border-left-color:var(--ok)}.card.red{border-left-color:var(--bad)}
+.card-head{font:inherit;color:inherit;background:none;border:0;width:100%;text-align:left;
+padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;
+-webkit-tap-highlight-color:transparent;border-radius:12px}
+.card-head:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
+.head-text{flex:1;min-width:0;display:block}
+.callout{margin:0 0 4px;font-weight:650;font-size:.95rem}
+.subtotal{color:var(--mut);font-size:.8rem}
+.chev{flex:none;color:var(--mut);font-size:1.1rem;transition:transform .18s ease}
+@media (prefers-reduced-motion: reduce){.chev{transition:none}}
+.card.open .chev{transform:rotate(90deg)}
+.detail{border-top:1px dashed var(--line);margin:0 16px 14px;padding-top:10px}
+.tested{margin:0 0 8px;font-size:.85rem}
+.ops-label,.ev-label{margin:0;color:var(--mut);font-size:.78rem;font-weight:600}
+.evidence,.notes{list-style:none;margin:8px 0 0;padding:0;font-size:.82rem}
+.evidence li,.notes li{padding:5px 0;border-top:1px dashed var(--line);display:flex;gap:8px}
+.mark{font-weight:700;flex:none}.pass .mark{color:var(--ok)}.fail .mark{color:var(--bad)}
+.skip .mark{color:var(--mut)}
+.cev{color:var(--mut);font-size:.78rem}
+.findings{background:var(--card);border:1px solid var(--bad);border-radius:12px;padding:14px 16px;margin:12px 0}
+.findings h2{margin:0 0 8px;font-size:1rem;color:var(--bad)}
+.findings ul{list-style:none;margin:0;padding:0;font-size:.85rem}
+.findings li{padding:6px 0;border-top:1px dashed var(--line)}
+.fev{color:var(--mut);font-size:.8rem}
+.tiers{font-size:.85rem;margin:0 0 8px}
+.tablewrap{overflow-x:auto}
+table.cases{border-collapse:collapse;width:100%;font-size:.8rem;margin:4px 0 8px}
+table.cases th,table.cases td{border:1px solid var(--line);padding:4px 8px;text-align:left}
+.cok{color:var(--ok);font-weight:700}.cbad{color:var(--bad);font-weight:700}
+.vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.modebar.stub{background:#ede9fe;color:#4c1d95;border-bottom:1px solid #c4b5fd}
+@media(prefers-color-scheme:dark){
+.modebar.stub{background:#2e1065;color:#ddd6fe}}
+.transcript{background:var(--card);border:1px solid var(--line);border-radius:12px;
+padding:14px 16px;margin:16px 0;font-size:.8rem}
+.transcript summary{cursor:pointer;font-weight:600}
+.transcript h3{font-size:.85rem;margin:12px 0 4px}
+.transcript pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);
+border:1px solid var(--line);border-radius:8px;padding:10px;max-height:320px;overflow:auto;font-size:.75rem}
+.total{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+margin:16px 0;text-align:center}
+.total b{font-size:1.1rem}
+footer{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}
+</style></head><body>
+<header class="hero">
+  <h1><span aria-hidden="true">🛡️</span> Leakage validation</h1>
+  <p>muse-leakage-guard · bin/leakage-audit + bin/adversarial-run</p>
+  <span class="badge ok">CLEAN</span>
+  <div class="meta"><span>2026-09-17 22:29 UTC</span><span>target: ~/workspace/skills/muse-leakage-guard/test/stub-memory-skill</span><span><strong>target-kind: SYNTHETIC STUB</strong></span></div>
+</header>
+<div class="modebar sim"><strong>SIMULATED</strong> — fake binaries; nothing was sent.</div>
+<div class="modebar stub"><strong>SYNTHETIC STUB TARGET</strong> — harness self-test against the bundled test double; not a validation of any real installation. A 36/36 here proves harness self-consistency, not detector quality.</div>
+<main class="wrap">
+
+
+    <section class="card ok" aria-labelledby="callout-A">
+      <button class="card-head" aria-expanded="false" aria-controls="detail-A">
+        <span class="head-text">
+          <h2 class="callout" id="callout-A"><span aria-hidden="true">🟢</span> Installation integrity: 20 of 20 green.</h2>
+          <span class="subtotal">20 passed · 0 failed · 0 skipped</span>
+        </span>
+        <span class="chev" aria-hidden="true">▸</span>
+      </button>
+      <div class="detail" id="detail-A" role="region" aria-labelledby="callout-A" hidden>
+        <p class="tested">Stub target — 20 installation checks on this machine, just now: stub gate binaries present, executable and parse-clean; send shims shadow the real CLIs on PATH; fixtures present and non-empty; adversarial corpus intact.</p>
+        
+        
+        <h3 class="ev-label">Full evidence (20 items)</h3>
+        <ul class="evidence"><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/egress-gate present and executable</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/brief-gate present and executable</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/memory-egress-check present and executable</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/egress-gate parses</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/brief-gate parses</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/memory-egress-check parses</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/shims/hatch_gws_cli parses</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>bin/shims/hatch_messenger_cli parses</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>shim hatch_gws_cli shadows real binary on PATH</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>real hatch_gws_cli discoverable behind shim</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>shim hatch_messenger_cli shadows real binary on PATH</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>real hatch_messenger_cli discoverable behind shim</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>fixture clean.txt present and non-empty</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>fixture secret.txt present and non-empty</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>fixture secret2.txt present and non-empty</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>fixture ssn.txt present and non-empty</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>fixture card.txt present and non-empty</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>fixture figure.txt present and non-empty</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>fixture phone.txt present and non-empty</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>adversarial corpus has 36 cases</span></li></ul>
+      </div>
+    </section>
+    <section class="card ok" aria-labelledby="callout-B">
+      <button class="card-head" aria-expanded="false" aria-controls="detail-B">
+        <span class="head-text">
+          <h2 class="callout" id="callout-B"><span aria-hidden="true">🟢</span> Gate effectiveness: 29 of 29 green.</h2>
+          <span class="subtotal">29 passed · 0 failed · 0 skipped</span>
+        </span>
+        <span class="chev" aria-hidden="true">▸</span>
+      </button>
+      <div class="detail" id="detail-B" role="region" aria-labelledby="callout-B" hidden>
+        <p class="tested">29 red-team checks (simulated through fake real binaries — nothing was sent). Block-tier payloads must be refused with rc=1 and the real binary uninvoked; review-tier payloads refused without approval (rc=2); clean payloads pass (rc=0).</p>
+        
+        
+        <h3 class="ev-label">Full evidence (29 items)</h3>
+        <ul class="evidence"><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>egress gate: clean passes (rc=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>egress gate: fake api key blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>egress gate: fake private key blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>egress gate: test SSN blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>egress gate: test card blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>egress gate: figure needs approval (rc=2)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>egress gate: phone needs approval (rc=2)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>brief gate: clean passes (rc=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>brief gate: fake api key blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>brief gate: fake private key blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>brief gate: test SSN blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>brief gate: test card blocked (rc=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>brief gate: figure needs approval (rc=2)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>brief gate: phone needs approval (rc=2)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gmail +send clean passes (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gmail +send secret blocked (rc=1 invoked=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gmail +reply ssn blocked (rc=1 invoked=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gmail +send figure refused w/o approval (rc=2 invoked=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gmail +send figure allowed with approval (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gmail +send --draft with secret passes through (stays in account) (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gmail non-send passes through (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>raw messages.send with card in MIME blocked (rc=1 invoked=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>messenger send clean passes (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>messenger send secret blocked (rc=1 invoked=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>messenger threads passes through (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>drive permissions create refused w/o approval (rc=2 invoked=0)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>drive permissions create allowed with approval (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>drive files list passes through (free zone) (rc=0 invoked=1)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>messenger stdin replayed byte-identical on allow</span></li></ul>
+      </div>
+    </section>
+    <section class="card ok" aria-labelledby="callout-C">
+      <button class="card-head" aria-expanded="false" aria-controls="detail-C">
+        <span class="head-text">
+          <h2 class="callout" id="callout-C"><span aria-hidden="true">🟢</span> Attack-surface coverage: 8 of 9 green, 1 skipped.</h2>
+          <span class="subtotal">8 passed · 0 failed · 1 skipped</span>
+        </span>
+        <span class="chev" aria-hidden="true">▸</span>
+      </button>
+      <div class="detail" id="detail-C" role="region" aria-labelledby="callout-C" hidden>
+        <p class="tested">9 static checks on the protection wiring (agent-manual mandates, briefing policy, cron shim-PATH wiring, scenario coverage map, public-repo denylist scan, fixture purity) — 8 passed, 1 skipped.</p>
+        
+        
+        <h3 class="ev-label">Full evidence (9 items)</h3>
+        <ul class="evidence"><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>agent manual mandates shim PATH</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>agent manual mandates brief gating</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>briefing policy reference exists</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>free-share zones defined in data-protection.md</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>cron prompts in ~/workspace/goals/daily-memory-refresh/crons wire shim PATH (4/4)</span></li><li class="skip"><span class="mark" aria-hidden="true">–</span><span class="vh">Skipped: </span><span>memory-audit run [set MOCHI_MEMORY_AUDIT=1 to include]</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>all 22 attack-surface scenarios mapped in test-matrix.md</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>no denylisted literals in public repo tracked files (B2/B3)</span></li><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>all secret-shaped fixture values are declared synthetic</span></li></ul>
+      </div>
+    </section>
+    <section class="card ok" aria-labelledby="callout-D">
+      <button class="card-head" aria-expanded="false" aria-controls="detail-D">
+        <span class="head-text">
+          <h2 class="callout" id="callout-D"><span aria-hidden="true">🟢</span> Gate audit-log review: 1 of 1 green.</h2>
+          <span class="subtotal">1 passed · 0 failed · 0 skipped</span>
+        </span>
+        <span class="chev" aria-hidden="true">▸</span>
+      </button>
+      <div class="detail" id="detail-D" role="region" aria-labelledby="callout-D" hidden>
+        <p class="tested">Gate audit log reviewed (56 gate decisions logged); blocked attempts and approval overrides surfaced in the evidence.</p>
+        
+        
+        <h3 class="ev-label">Full evidence (1 item)</h3>
+        <ul class="evidence"><li class="pass"><span class="mark" aria-hidden="true">✓</span><span class="vh">Pass: </span><span>gate log reviewed</span></li></ul>
+      </div>
+    </section>
+    <section class="card skip" aria-labelledby="callout-E">
+      <button class="card-head" aria-expanded="false" aria-controls="detail-E">
+        <span class="head-text">
+          <h2 class="callout" id="callout-E"><span aria-hidden="true">🟡</span> Known residuals: 4 known paths reported and tracked — none silent.</h2>
+          <span class="subtotal">0 passed · 0 failed · 0 skipped</span>
+        </span>
+        <span class="chev" aria-hidden="true">▸</span>
+      </button>
+      <div class="detail" id="detail-E" role="region" aria-labelledby="callout-E" hidden>
+        <p class="tested">Residual paths with no technical choke point, tracked openly: browser-task sends: separate VM, shims can&#x27;t reach; brief-level instruction only; absolute-path bypass of shims: forbidden by policy, not technically preventable; voice calls: phone tool&#x27;s own confirmation flow (out of text-gate scope); brief-gate runs on mandate (no syscall interception for brief text).</p>
+        
+        
+        <h3 class="ev-label">Full evidence (4 items)</h3>
+        <ul class="evidence"><li>browser-task sends: separate VM, shims can&#x27;t reach; brief-level instruction only</li><li>absolute-path bypass of shims: forbidden by policy, not technically preventable</li><li>voice calls: phone tool&#x27;s own confirmation flow (out of text-gate scope)</li><li>brief-gate runs on mandate (no syscall interception for brief text)</li></ul>
+      </div>
+    </section>
+    <section class="card ok" aria-labelledby="callout-F">
+      <button class="card-head" aria-expanded="false" aria-controls="detail-F">
+        <span class="head-text">
+          <h2 class="callout" id="callout-F"><span aria-hidden="true">🔵</span> Stub consistency: 36/36 corpus cases matched expected verdicts against the synthetic test double — harness self-check, not detector validation.</h2>
+          <span class="subtotal">36 passed · 0 failed · 0 skipped</span>
+        </span>
+        <span class="chev" aria-hidden="true">▸</span>
+      </button>
+      <div class="detail" id="detail-F" role="region" aria-labelledby="callout-F" hidden>
+        <p class="tested">Stub target — 36/36 corpus cases matched expected verdicts (block-tier recall 19/19, review-tier recall 9/9, clean precision 8/8). harness self-consistency check against the test double — no sends in either mode. This figure measures the harness against the stub, not real detector quality.</p>
+        
+        <p class="tiers">block-tier recall 19/19 · review-tier recall 9/9 · clean precision 8/8</p><div class="tablewrap"><table class="cases"><thead><tr><th scope="col">case</th><th scope="col">want</th><th scope="col">got</th><th scope="col">match</th></tr></thead><tbody><tr><td>stripe_live</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>stripe_test</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>google_api</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>groq_key</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>github_pat</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>slack_bot</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>openai_key</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>api_key_eq</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>api_key_space</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>password_colon</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>passwd_eq</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>pem_key</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>pem_ec</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>ssn_dash</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>ssn_bare</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>card_dash</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>card_space</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>card_bare</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>amex_15</td><td>rc=1</td><td>rc=1</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>fig_dollar</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>fig_m</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>fig_week</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>fig_decimal</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>phone_dash</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>phone_paren</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>phone_dot</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>phone_plus1</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>phone_bare10</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>clean_text</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>clean_price</td><td>rc=2</td><td>rc=2</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>shell_var</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>shell_brace</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>date_iso</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>order_num</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>zip_code</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr><tr><td>version</td><td>rc=0</td><td>rc=0</td><td class="cok">✓<span class="vh">matched</span></td></tr></tbody></table></div>
+        <h3 class="ev-label">Full evidence (0 items)</h3>
+        <ul class="evidence"></ul>
+      </div>
+    </section>
+<div class="total"><b>Total: 58 passed · 0 failed · 1 skipped</b>
+<p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">AUDIT VERDICT: CLEAN · adversarial: 36/36 matched</p></div>
+<details class="transcript"><summary>Raw transcripts</summary>
+<h3>bin/leakage-audit</h3><pre>
+  muse-leakage-guard · leakage-audit
+  2026-09-17 22:29 UTC
+@@@ TS 2026-09-17 22:29 UTC
+  target:
+    ~/workspace/skills/muse-leakage-guard/test/stu
+    b-memory-skill
+@@@ TARGET ~/workspace/skills/muse-leakage-guard/test/stub-memory-skill
+  target-kind: SYNTHETIC STUB —
+    interface-conformance double, not the owner&#x27;s
+    installation
+@@@ STUBKIND synthetic-stub
+  mode: SIMULATED (fake binaries; nothing is
+    sent)
+@@@ MODE SIMULATED
+  ══════════════════════════════════════════════
+@@@ SUITE A Installation integrity
+
+    A. Installation integrity
+  ──────────────────────────────────────────────
+@@@ CHECK PASS bin/egress-gate present and executable
+  ✓ bin/egress-gate present and executable
+@@@ CHECK PASS bin/brief-gate present and executable
+  ✓ bin/brief-gate present and executable
+@@@ CHECK PASS bin/memory-egress-check present and executable
+  ✓ bin/memory-egress-check present and
+    executable
+@@@ CHECK PASS bin/egress-gate parses
+  ✓ bin/egress-gate parses
+@@@ CHECK PASS bin/brief-gate parses
+  ✓ bin/brief-gate parses
+@@@ CHECK PASS bin/memory-egress-check parses
+  ✓ bin/memory-egress-check parses
+@@@ CHECK PASS bin/shims/hatch_gws_cli parses
+  ✓ bin/shims/hatch_gws_cli parses
+@@@ CHECK PASS bin/shims/hatch_messenger_cli parses
+  ✓ bin/shims/hatch_messenger_cli parses
+@@@ CHECK PASS shim hatch_gws_cli shadows real binary on PATH
+  ✓ shim hatch_gws_cli shadows real binary
+    on PATH
+@@@ CHECK PASS real hatch_gws_cli discoverable behind shim
+  ✓ real hatch_gws_cli discoverable behind
+    shim
+@@@ CHECK PASS shim hatch_messenger_cli shadows real binary on PATH
+  ✓ shim hatch_messenger_cli shadows real
+    binary on PATH
+@@@ CHECK PASS real hatch_messenger_cli discoverable behind shim
+  ✓ real hatch_messenger_cli discoverable
+    behind shim
+@@@ CHECK PASS fixture clean.txt present and non-empty
+  ✓ fixture clean.txt present and non-empty
+@@@ CHECK PASS fixture secret.txt present and non-empty
+  ✓ fixture secret.txt present and non-empty
+@@@ CHECK PASS fixture secret2.txt present and non-empty
+  ✓ fixture secret2.txt present and
+    non-empty
+@@@ CHECK PASS fixture ssn.txt present and non-empty
+  ✓ fixture ssn.txt present and non-empty
+@@@ CHECK PASS fixture card.txt present and non-empty
+  ✓ fixture card.txt present and non-empty
+@@@ CHECK PASS fixture figure.txt present and non-empty
+  ✓ fixture figure.txt present and non-empty
+@@@ CHECK PASS fixture phone.txt present and non-empty
+  ✓ fixture phone.txt present and non-empty
+@@@ CHECK PASS adversarial corpus has 36 cases
+  ✓ adversarial corpus has 36 cases
+@@@ ENDSUITE A 20 0 0
+  ──────────────────────────────────────────────
+    20 passed · 0 failed · 0 skipped
+@@@ SUITE B Gate effectiveness (red team, synthetic payloads)
+
+    B. Gate effectiveness (red team, synthetic
+     payloads)
+  ──────────────────────────────────────────────
+@@@ CHECK PASS egress gate: clean passes (rc=0)
+  ✓ egress gate: clean passes (rc=0)
+@@@ CHECK PASS egress gate: fake api key blocked (rc=1)
+  ✓ egress gate: fake api key blocked (rc=1)
+@@@ CHECK PASS egress gate: fake private key blocked (rc=1)
+  ✓ egress gate: fake private key blocked
+    (rc=1)
+@@@ CHECK PASS egress gate: test SSN blocked (rc=1)
+  ✓ egress gate: test SSN blocked (rc=1)
+@@@ CHECK PASS egress gate: test card blocked (rc=1)
+  ✓ egress gate: test card blocked (rc=1)
+@@@ CHECK PASS egress gate: figure needs approval (rc=2)
+  ✓ egress gate: figure needs approval
+    (rc=2)
+@@@ CHECK PASS egress gate: phone needs approval (rc=2)
+  ✓ egress gate: phone needs approval (rc=2)
+@@@ CHECK PASS brief gate: clean passes (rc=0)
+  ✓ brief gate: clean passes (rc=0)
+@@@ CHECK PASS brief gate: fake api key blocked (rc=1)
+  ✓ brief gate: fake api key blocked (rc=1)
+@@@ CHECK PASS brief gate: fake private key blocked (rc=1)
+  ✓ brief gate: fake private key blocked
+    (rc=1)
+@@@ CHECK PASS brief gate: test SSN blocked (rc=1)
+  ✓ brief gate: test SSN blocked (rc=1)
+@@@ CHECK PASS brief gate: test card blocked (rc=1)
+  ✓ brief gate: test card blocked (rc=1)
+@@@ CHECK PASS brief gate: figure needs approval (rc=2)
+  ✓ brief gate: figure needs approval (rc=2)
+@@@ CHECK PASS brief gate: phone needs approval (rc=2)
+  ✓ brief gate: phone needs approval (rc=2)
+@@@ CHECK PASS gmail +send clean passes (rc=0 invoked=1)
+  ✓ gmail +send clean passes (rc=0
+    invoked=1)
+@@@ CHECK PASS gmail +send secret blocked (rc=1 invoked=0)
+  ✓ gmail +send secret blocked (rc=1
+    invoked=0)
+@@@ CHECK PASS gmail +reply ssn blocked (rc=1 invoked=0)
+  ✓ gmail +reply ssn blocked (rc=1
+    invoked=0)
+@@@ CHECK PASS gmail +send figure refused w/o approval (rc=2 invoked=0)
+  ✓ gmail +send figure refused w/o approval
+    (rc=2 invoked=0)
+@@@ CHECK PASS gmail +send figure allowed with approval (rc=0 invoked=1)
+  ✓ gmail +send figure allowed with
+    approval (rc=0 invoked=1)
+@@@ CHECK PASS gmail +send --draft with secret passes through (stays in account) (rc=0 invoked=1)
+  ✓ gmail +send --draft with secret passes
+    through (stays in account) (rc=0 invoked=1)
+@@@ CHECK PASS gmail non-send passes through (rc=0 invoked=1)
+  ✓ gmail non-send passes through (rc=0
+    invoked=1)
+@@@ CHECK PASS raw messages.send with card in MIME blocked (rc=1 invoked=0)
+  ✓ raw messages.send with card in MIME
+    blocked (rc=1 invoked=0)
+@@@ CHECK PASS messenger send clean passes (rc=0 invoked=1)
+  ✓ messenger send clean passes (rc=0
+    invoked=1)
+@@@ CHECK PASS messenger send secret blocked (rc=1 invoked=0)
+  ✓ messenger send secret blocked (rc=1
+    invoked=0)
+@@@ CHECK PASS messenger threads passes through (rc=0 invoked=1)
+  ✓ messenger threads passes through (rc=0
+    invoked=1)
+@@@ CHECK PASS drive permissions create refused w/o approval (rc=2 invoked=0)
+  ✓ drive permissions create refused w/o
+    approval (rc=2 invoked=0)
+@@@ CHECK PASS drive permissions create allowed with approval (rc=0 invoked=1)
+  ✓ drive permissions create allowed with
+    approval (rc=0 invoked=1)
+@@@ CHECK PASS drive files list passes through (free zone) (rc=0 invoked=1)
+  ✓ drive files list passes through (free
+    zone) (rc=0 invoked=1)
+@@@ CHECK PASS messenger stdin replayed byte-identical on allow
+  ✓ messenger stdin replayed byte-identical
+    on allow
+@@@ ENDSUITE B 29 0 0
+  ──────────────────────────────────────────────
+    29 passed · 0 failed · 0 skipped
+@@@ SUITE C Attack-surface coverage (static checks)
+
+    C. Attack-surface coverage (static checks)
+  ──────────────────────────────────────────────
+@@@ CHECK PASS agent manual mandates shim PATH
+  ✓ agent manual mandates shim PATH
+@@@ CHECK PASS agent manual mandates brief gating
+  ✓ agent manual mandates brief gating
+@@@ CHECK PASS briefing policy reference exists
+  ✓ briefing policy reference exists
+@@@ CHECK PASS free-share zones defined in data-protection.md
+  ✓ free-share zones defined in
+    data-protection.md
+@@@ CHECK PASS cron prompts in ~/workspace/goals/daily-memory-refresh/crons wire shim PATH (4/4)
+  ✓ cron prompts in
+    ~/workspace/goals/daily-memory-refresh/crons
+     wire shim PATH (4/4)
+@@@ CHECK SKIP memory-audit run [set MOCHI_MEMORY_AUDIT=1 to include]
+  – memory-audit run [set
+    MOCHI_MEMORY_AUDIT=1 to include]
+@@@ CHECK PASS all 22 attack-surface scenarios mapped in test-matrix.md
+  ✓ all 22 attack-surface scenarios mapped
+    in test-matrix.md
+@@@ CHECK PASS no denylisted literals in public repo tracked files (B2/B3)
+  ✓ no denylisted literals in public repo
+    tracked files (B2/B3)
+@@@ CHECK PASS all secret-shaped fixture values are declared synthetic
+  ✓ all secret-shaped fixture values are
+    declared synthetic
+@@@ ENDSUITE C 8 0 1
+  ──────────────────────────────────────────────
+    8 passed · 0 failed · 1 skipped
+@@@ SUITE D Gate audit-log review
+
+    D. Gate audit-log review
+  ──────────────────────────────────────────────
+@@@ CTX 56 gate decisions logged
+    56 gate decisions logged
+@@@ CTX needs-approval: 11
+    needs-approval: 11
+@@@ CHECK PASS gate log reviewed
+  ✓ gate log reviewed
+@@@ ENDSUITE D 1 0 0
+  ──────────────────────────────────────────────
+    1 passed · 0 failed · 0 skipped
+@@@ SUITE E Known residuals (reported, never silent)
+
+    E. Known residuals (reported, never silent)
+  ──────────────────────────────────────────────
+@@@ CTX - browser-task sends: separate VM, shims can&#x27;t reach; brief-level instruction only
+    - browser-task sends: separate VM, shims
+      can&#x27;t reach; brief-level instruction only
+@@@ CTX - absolute-path bypass of shims: forbidden by policy, not technically preventable
+    - absolute-path bypass of shims:
+      forbidden by policy, not technically
+      preventable
+@@@ CTX - voice calls: phone tool&#x27;s own confirmation flow (out of text-gate scope)
+    - voice calls: phone tool&#x27;s own
+      confirmation flow (out of text-gate scope)
+@@@ CTX - brief-gate runs on mandate (no syscall interception for brief text)
+    - brief-gate runs on mandate (no syscall
+      interception for brief text)
+@@@ ENDSUITE E 0 0 0
+  ──────────────────────────────────────────────
+    0 passed · 0 failed · 0 skipped
+
+  Summary
+  ──────────────────────────────────────────────
+  A. Installation integrity
+    20 passed · 0 failed · 0 skipped
+  B. Gate effectiveness
+    29 passed · 0 failed · 0 skipped
+  C. Attack-surface coverage
+    8 passed · 0 failed · 1 skipped
+  D. Gate audit-log review
+    1 passed · 0 failed · 0 skipped
+  E. Known residuals
+    0 passed · 0 failed · 0 skipped
+  ──────────────────────────────────────────────
+  Total: 58 passed · 0 failed · 1 skipped
+  mode: SIMULATED (fake binaries; nothing is
+    sent)
+@@@ TOTAL 58 0 1
+  VERDICT: CLEAN — all 58 checks passed (1
+    skipped).
+@@@ VERDICT VERDICT: CLEAN — all 58 checks passed (1 skipped).
+
+</pre>
+<h3>bin/adversarial-run</h3><pre>adversarial-run: 36/36 cases matched expected verdicts.
+adversarial-run: block-tier recall 19/19 · review-tier recall 9/9 · clean precision 8/8
+</pre>
+</details>
+<footer>Synthetic stub target — this report validates the harness against the bundled test double, not any real installation. Synthetic payloads only — nothing real was sent or disclosed.</footer>
+</main>
+<script>
+document.querySelectorAll('.card-head').forEach(function(head){
+  head.addEventListener('click', function(){
+    var card = head.closest('.card');
+    var detail = card.querySelector('.detail');
+    var open = detail.hasAttribute('hidden');
+    if (open) { detail.removeAttribute('hidden'); }
+    else { detail.setAttribute('hidden', ''); }
+    card.classList.toggle('open', open);
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+});
+</script>
+</body></html>

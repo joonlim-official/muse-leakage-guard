@@ -40,17 +40,20 @@ if [ "$(canon "$REAL")" = "$SHIM_CANON/hatch_messenger_cli" ]; then
   exit 1
 fi
 
+# A literal "--" ends option parsing; post-"--" positionals may still be
+# interpreted as message content by the real CLI, so they are gated too.
 case "${1:-}" in
   send|edit)
-    text=""; prev=""; ctx="messenger $1 (stub)"
+    text=""; prev=""; ctx="messenger $1 (stub)"; ddash=0
     for a in "$@"; do
       case "$a" in
+        --) ddash=1; prev="";;
         --text=*) text="${a#--text=}"; prev="";;
         --cid=*|--to=*) prev="";;
         --cid|--to) prev="";;
         --text) prev=t;;
         --text-stdin) prev="";;
-        *) [ "$prev" = "t" ] && text="$a"; prev="";;
+        *) [ "$prev" = "t" ] && text="$a"; [ "$ddash" = "1" ] && [ "$prev" != "t" ] && text="${text:+$text }$a"; prev="";;
       esac
     done
     tmp="$(mktemp)"

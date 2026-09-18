@@ -17,9 +17,17 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$BRIEF" ] && { echo "brief-gate(stub): --brief-file is required" >&2; exit 1; }  # usage error is not a verdict: fail closed (never 2=approvable review)
 [ "${MOCHI_EGRESS_APPROVED:-}" = "1" ] && APPROVED=1
+LOG="${MOCHI_EGRESS_LOG:-$STUB_DIR/gate.log}"
+ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+log_verdict() { printf '%s | %s | %s\n' "$ts" "brief:${TASK:-delegation} (stub)" "$1" >> "$LOG"; }
 "$STUB_DIR/bin/memory-egress-check" "$BRIEF" >/dev/null 2>&1; RC=$?
-[ "$RC" -eq 1 ] && { echo "brief-gate(stub): BLOCK — block-tier content in brief" >&2; exit 1; }
+[ "$RC" -eq 1 ] && { log_verdict "BLOCKED"; echo "brief-gate(stub): BLOCK — block-tier content in brief" >&2; exit 1; }
 if [ "$RC" -eq 2 ] && [ "$APPROVED" -ne 1 ]; then
-  echo "brief-gate(stub): REVIEW — figures/contact info need approval" >&2; exit 2
+  log_verdict "needs-approval"; echo "brief-gate(stub): REVIEW — figures/contact info need approval" >&2; exit 2
 fi
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 1 ] && [ "$RC" -ne 2 ]; then
+  # Fail closed: abnormal detector exit is not a verdict.
+  log_verdict "detector-error"; echo "brief-gate(stub): detector exited abnormally (rc=$RC); failing closed" >&2; exit 1
+fi
+if [ "$RC" -eq 2 ]; then log_verdict "approved-override"; else log_verdict "clean"; fi
 exit 0

@@ -2,9 +2,15 @@
 # hatch_gws_cli (SYNTHETIC STUB shim) — mirrors the interception contract of
 # the real gmail/drive shim for harness self-consistency checks.
 # Interface version 1 (see ../../../references/gate-interface.md):
-#   gmail +send|+reply|+forward [--to T] [--subject S] [--body B]
+#   gmail +send|+reply|+reply-all|+forward [--to T] [--subject S] [--body B]
 #       --draft/--dry-run as flags pass through UNGATED (never leave the
 #       account); as flag values (--subject --draft ...) they are gated content
+#   A literal "--" ends option parsing: post-"--" positionals are gated as
+#       body (fail-safe over the parser ambiguity).
+#   gmail users drafts send -> the draft's decoded body is gated (draft
+#       creation stays ungated by design); unresolvable bodies are refused
+#   gmail users settings updateAutoForwarding|delegates|filters|sendAs ->
+#       refused (rc=2) unless approved
 #   gmail users messages send --params '{"raw":"<base64url MIME>"}'
 #       -> the MIME is base64-decoded and gated before delegation
 #   gmail users messages send with '{"raw":"<base64url MIME>"}' on stdin
@@ -81,15 +87,18 @@ fi
 if [ "${1:-}" = "gmail" ]; then
   sub="${2:-}"
   case "$sub" in
-    +send|+reply|+forward)
+    +send|+reply|+reply-all|+forward)
       # Parse --to/--subject/--body (space or = forms), tracking whether each
       # token is a flag or a flag VALUE. --draft/--dry-run pass through UNGATED
       # (drafts never leave the account) only when they appear as flags — never
       # as the value of --subject/--body/--to (or an unknown option), where
       # treating them as flags would skip the gate on real content.
-      subject=""; body=""; to=""; prev=""; prev_opt=""; draft=0
+      # A literal "--" ends option parsing; the real CLI may still interpret
+      # post-"--" positionals as content, so they are gated as body.
+      subject=""; body=""; to=""; prev=""; prev_opt=""; draft=0; ddash=0
       for a in "$@"; do
         case "$a" in
+          --) ddash=1; prev=""; prev_opt="";;
           --subject=*) subject="${a#--subject=}"; prev=""; prev_opt="";;
           --body=*)    body="${a#--body=}";       prev=""; prev_opt="";;
           --to=*)      to="${a#--to=}";           prev=""; prev_opt="";;
@@ -97,13 +106,14 @@ if [ "${1:-}" = "gmail" ]; then
           --body)    prev=body; prev_opt="";;
           --to)      prev=to;   prev_opt="";;
           --draft|--dry-run)
-            if [ -n "$prev" ] || [ -n "$prev_opt" ]; then
-              # flag value, not a flag: keep it in the gated content
+            if [ -n "$prev" ] || [ -n "$prev_opt" ] || [ "$ddash" = "1" ]; then
+              # flag value (or post-"--" positional), not a flag: gated content
               case "$prev" in
                 subj) subject="$a";;
                 body) body="$a";;
                 to)   to="$a";;
               esac
+              [ "$ddash" = "1" ] && body="${body:+$body }$a"
               prev=""; prev_opt=""
             else
               draft=1
@@ -113,6 +123,7 @@ if [ "${1:-}" = "gmail" ]; then
                body) body="$a";;
                to)   to="$a";;
              esac
+             [ "$ddash" = "1" ] && [ -z "$prev" ] && body="${body:+$body }$a"
              case "$a" in --*) prev_opt=1;; *) prev_opt="";; esac
              prev="";;
         esac
@@ -123,6 +134,65 @@ if [ "${1:-}" = "gmail" ]; then
       gate_file "$tmp" "gmail $sub to ${to:-unknown} (stub)" "$@"
       ;;
     users)
+      # drafts send: draft creation is deliberately ungated (drafts never
+      # leave the account), so the send step gates the draft's decoded body
+      # (fetched read-only from the delegate). Unresolvable bodies are
+      # refused — never send blind.
+      hit_drafts=0; hit_dsend=0
+      for a in "$@"; do
+        [ "$a" = "drafts" ] && hit_drafts=1
+        [ "$a" = "send" ] && hit_dsend=1
+      done
+      if [ "$hit_drafts" -eq 1 ] && [ "$hit_dsend" -eq 1 ]; then
+        did=""; prev=""
+        for a in "$@"; do
+          case "$a" in
+            --params=*|--json=*) did="$(printf '%s' "$a" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"; prev="";;
+            --params|--json) prev=p;;
+            *) [ "$prev" = "p" ] && { did="$(printf '%s' "$a" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"; prev=""; };;
+          esac
+        done
+        tmp="$(mktemp)"; draft_raw="$(mktemp)"
+        if [ -n "$did" ] && "$REAL" users drafts get --params "{\"id\":\"$did\",\"format\":\"full\"}" > "$draft_raw" 2>/dev/null; then
+          if ! command -v python3 >/dev/null 2>&1; then
+            rm -f "$tmp" "$draft_raw"
+            echo "stub-shim: python3 missing — cannot decode draft body; refusing drafts send (fail closed)." >&2
+            exit 1
+          fi
+          python3 - "$draft_raw" > "$tmp" 2>/dev/null <<'PYEOF'
+import sys, base64, re
+p = open(sys.argv[1]).read()
+out = [p]
+for m in re.finditer(r'[A-Za-z0-9+/=_-]{16,}', p):
+    s = m.group(0)
+    try:
+        pad = "=" * (-len(s) % 4)
+        out.append(base64.urlsafe_b64decode(s + pad).decode("utf-8", "replace"))
+    except Exception:
+        pass
+sys.stdout.write("\n".join(out))
+PYEOF
+          [ ! -s "$tmp" ] && cp "$draft_raw" "$tmp"
+          gate_file "$tmp" "gmail users drafts send (draft content, stub)" "$@"
+        else
+          rm -f "$tmp" "$draft_raw"
+          echo "stub-shim: draft body not resolvable — refusing drafts send (fail closed)." >&2
+          exit 1
+        fi
+      fi
+      # settings-plane mutations redirect where mail goes: approval-gated.
+      hit_settings=0; hit_mut=0
+      for a in "$@"; do
+        [ "$a" = "settings" ] && hit_settings=1
+        case "$a" in
+          updateAutoForwarding|delegates|filters|sendAs) hit_mut=1;;
+        esac
+      done
+      if [ "$hit_settings" -eq 1 ] && [ "$hit_mut" -eq 1 ]; then
+        if [ "${MOCHI_EGRESS_APPROVED:-0}" = "1" ]; then pass_through "$@"; fi
+        echo "stub-shim: changing Gmail forwarding/delegate/filter settings needs explicit approval — refused (stub)." >&2
+        exit 2
+      fi
       hit_m=0; hit_s=0
       for a in "$@"; do
         [ "$a" = "messages" ] && hit_m=1

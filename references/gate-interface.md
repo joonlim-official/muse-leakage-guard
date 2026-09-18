@@ -81,18 +81,33 @@ The shims must sit FIRST on `PATH` so they shadow the real CLIs:
 export PATH="<skill>/bin/shims:$PATH"
 ```
 
-- Gmail `+send`, `+reply`, `+forward`: subject/body/to pass `egress-gate`.
+- Gmail `+send`, `+reply`, `+reply-all`, `+forward`: subject/body/to pass
+  `egress-gate`.
 - `--draft` / `--dry-run` as flags pass through UNGATED (never leave the
   account); as flag values (e.g. `--subject --draft`) they are gated content —
   a flag-looking value must not skip the gate.
+- A literal `--` ends option parsing but does not end gating: positionals
+  after `--` are collected as message content and gated like any body.
 - Raw API path (`gmail users messages send` with `{"raw": "<base64url>"}` on
   stdin, or `--params`/`--json` carrying it): the MIME is base64-decoded and
-  gated before delegation. On allow via the stdin form, the original stdin
-  bytes are replayed to the delegate byte-identical.
+  gated before delegation. If the payload is malformed, undecodable, or no
+  Python interpreter is available to decode it, the shim refuses (nonzero,
+  never 0/2) — gating opaque bytes is not an option.
+- `gmail users drafts send`: draft creation is ungated by design (never
+  leaves the account), but the send step fetches the draft read-only,
+  base64-decodes its body, and gates the decoded content. A draft that
+  cannot be fetched refuses closed.
+- `gmail users settings` mutations (`updateAutoForwarding`, delegates,
+  filters, sendAs): refused (rc=2) unless approved — they redirect where
+  mail goes. Read-only settings gets pass through.
 - `drive permissions create` (positional subcommand): refused (rc=2) unless
   approved — sharing with others is never a free-share zone.
 - Messenger `send` / `edit`: the message (flag or stdin) passes
   `egress-gate`; on allow, stdin is replayed to the delegate byte-identical.
+  The `--` end-of-options rule applies here too.
+- Abnormal detector exits (anything outside {0,1,2}: crash, kill, missing
+  binary) fail closed: the gates surface rc=1 (blocked), never 0 and never
+  2 (a broken detector must not be approvable).
 - Delegation: the shim execs the next same-named binary on `PATH` after
   its own directory, or `$MOCHI_REAL_HATCH_GWS_CLI` /
   `$MOCHI_REAL_HATCH_MESSENGER_CLI` when set. No delegate → exit 127

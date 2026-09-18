@@ -115,7 +115,7 @@ else
   AUDIT_MODE_SHORT="SIMULATED"
 fi
 
-PASS=0; FAIL=0; SKIPPED=0
+PASS=0; FAIL=0; SKIPPED=0; WARN=0
 SUITE_LETTER=""; SUITE_NAME=""; sP=0; sF=0; sS=0
 ROWS=""; FINDINGS=""
 
@@ -158,6 +158,11 @@ wdetail() {
 }
 
 ok()   { PASS=$((PASS+1)); msent "CHECK PASS $(shorten "$1")"; wcheck "✓ $(shorten "$1")"; }
+# warn <name> [detail] — a finding worth surfacing that does not fail the
+# audit (e.g. an empty gate log: honest, but the "gate is exercised" claim
+# cannot be made). Counted separately; never silent, never red.
+warn() { WARN=$((WARN+1)); msent "CHECK WARN $(shorten "$1")"; wcheck "⚠ $(shorten "$1")";
+         if [ -n "${2:-}" ]; then printf '%s\n' "$2" | wdetail; fi }
 # bad <name> [evidence] [suggestion] — every failure carries a concrete
 # suggested remediation. This skill validates and suggests; it never
 # applies fixes — remediation belongs to the memory skill / the agent.
@@ -220,6 +225,7 @@ print_summary() {
     done <<< "$ROWS"
     printf '  %s\n' "$RULE"
     printf '  %-32s %5d %5d %5d\n' "Total" "$PASS" "$FAIL" "$SKIPPED"
+    if [ "$WARN" -gt 0 ]; then printf '  %-32s %5d\n' "Warnings" "$WARN"; fi
   else
     while IFS='|' read -r l lab p f s; do
       [ -n "$l" ] || continue
@@ -228,9 +234,12 @@ print_summary() {
     done <<< "$ROWS"
     printf '  %s\n' "$RULE"
     printf '%s\n' "Total: $PASS passed · $FAIL failed · $SKIPPED skipped" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
+    if [ "$WARN" -gt 0 ]; then printf '%s\n' "Warnings: $WARN" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'; fi
   fi
   if [ "$FAIL" -eq 0 ]; then
-    if [ "$SKIPPED" -gt 0 ]; then
+    if [ "$WARN" -gt 0 ]; then
+      v="VERDICT: CLEAN — all $PASS checks passed ($SKIPPED skipped, $WARN warning(s) noted above)."
+    elif [ "$SKIPPED" -gt 0 ]; then
       v="VERDICT: CLEAN — all $PASS checks passed ($SKIPPED skipped)."
     else
       v="VERDICT: CLEAN — all $PASS checks passed."
@@ -240,6 +249,7 @@ print_summary() {
   fi
   printf '%s\n' "mode: $AUDIT_MODE" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
   msent "TOTAL $PASS $FAIL $SKIPPED"
+  msent "WARNINGS $WARN"
   printf '%s\n' "$v" | fold -s -w "$((WIDTH-2))" | sed 's/ *$//; 1s/^/  /; 2,$s/^/    /'
   msent "VERDICT $v"
   if [ "$FAIL" -gt 0 ]; then
@@ -256,6 +266,9 @@ T="$(mktemp -d)"
 
 # ---------------------------------------------------------------- A. install
 begin_suite "A" "Installation integrity"
+# Keep validation out of the real gate log from the very first gate
+# invocation: every check below writes to a throwaway log instead.
+export MOCHI_EGRESS_LOG="$T/gate.log"
 # Contract conformance is established before any contract-shaped probe runs:
 # the target must declare the interface version this audit implements.
 if [ "$STUBKIND" = "synthetic-stub" ]; then
@@ -332,6 +345,27 @@ else
   skip "blockset currency" "stub-only: the real installation has no build-blockset.sh"
 fi
 
+# Fail-closed on abnormal detector exits: a detector that crashes (rc=3) or
+# is killed (rc=137) must read as BLOCKED, never as clean. Exercised on a
+# /tmp copy of the target so the real files are untouched; runs for every
+# target (stub and real).
+crash_stub="$T/crash-target"
+for crash_rc in 3 137; do
+  rm -rf "$crash_stub"; cp -r "$MEM_SKILL" "$crash_stub"
+  printf '#!/usr/bin/env bash\nexit %s\n' "$crash_rc" > "$crash_stub/bin/memory-egress-check"
+  chmod +x "$crash_stub/bin/memory-egress-check"
+  for gate in egress-gate brief-gate; do
+    if [ "$gate" = "brief-gate" ]; then
+      timeout -k 10 30 "$crash_stub/bin/$gate" --brief-file "$FIX/clean.txt" --task "leakage-audit:crash-probe" >/dev/null 2>&1; grc=$?
+    else
+      timeout -k 10 30 "$crash_stub/bin/$gate" --content-file "$FIX/clean.txt" --context "leakage-audit:crash-probe" >/dev/null 2>&1; grc=$?
+    fi
+    if [ "$grc" -eq 1 ]; then ok "$gate fails closed on detector rc=$crash_rc (clean fixture refused)"
+    else bad "$gate allowed clean content when the detector exited rc=$crash_rc (got rc=$grc, want 1)" "" "a broken detector must fail closed: any detector exit outside {0,1,2} must become BLOCKED (rc=1), never allow. Fix the gate's exit-code handling, then re-run."; fi
+  done
+done
+rm -rf "$crash_stub"
+
 end_suite
 
 if [ "$INTERFACE_OK" != "1" ]; then
@@ -370,11 +404,26 @@ if [ "$LIVE_FIRE" = "1" ]; then
   wdetail "LIVE-FIRE: real sends to the owner's own accounts; synthetic payloads only."
 else
   mkdir -p "$T/fakebin"
+  # Draft bodies for the drafts-send probes: base64 MIME bodies the shim
+  # decodes and gates. FAKE_DRAFT_BODY=secret|clean selects the variant.
+  FAKE_DRAFT_SECRET_B64="$(python3 -c "import base64,sys; sys.stdout.write(base64.urlsafe_b64encode(open('$FIX/secret.txt','rb').read()).decode())")"
+  FAKE_DRAFT_CLEAN_B64="$(python3 -c "import base64,sys; sys.stdout.write(base64.urlsafe_b64encode(open('$FIX/clean.txt','rb').read()).decode())")"
+  export FAKE_DRAFT_SECRET_B64 FAKE_DRAFT_CLEAN_B64
   cat > "$T/fakebin/real-gws" <<'EOF'
 #!/usr/bin/env bash
 # Invocation sentinel: the audit asserts on this file, not on stdout text
 # (a crashing binary could echo a marker without touching it). Arg values are
 # hashed, never echoed — failure evidence must not carry fixture content.
+if [ "${1:-} ${2:-} ${3:-}" = "users drafts get" ]; then
+  # Read-only draft fetch for the drafts-send probes: a `drafts get` is not
+  # a send, so it does not touch the invocation sentinel.
+  if [ "${FAKE_DRAFT_BODY:-clean}" = "secret" ]; then
+    printf '%s' "{\"message\":{\"payload\":{\"body\":{\"data\":\"$FAKE_DRAFT_SECRET_B64\"}}}"
+  else
+    printf '%s' "{\"message\":{\"payload\":{\"body\":{\"data\":\"$FAKE_DRAFT_CLEAN_B64\"}}}"
+  fi
+  exit 0
+fi
 touch "$T_INVOKED_DIR/invoked-any"
 echo "REAL-GWS-INVOKED argv-sha256=$(printf '%s' "$*" | sha256sum | cut -d' ' -f1)"
 exit 0
@@ -391,7 +440,7 @@ EOF
   export MOCHI_REAL_HATCH_GWS_CLI="$T/fakebin/real-gws"
   export MOCHI_REAL_HATCH_MESSENGER_CLI="$T/fakebin/real-msg"
 fi
-export MOCHI_EGRESS_LOG="$T/gate.log"   # keep validation out of the real log
+export MOCHI_EGRESS_LOG="$T/gate.log"   # (already set before suite A; restated for suite B's fake-binary section)
 export PATH="$SHIMDIR:$PATH"
 
 gate_expect() { # <name> <gate:egress|brief> <fixture> <want_rc>
@@ -484,9 +533,30 @@ send_expect "raw messages.send via stdin with clean MIME passes" 0 1 -- bash -c 
 # Draft token-confusion: --draft as the VALUE of --subject is gated content,
 # not a draft flag — it must not skip the gate on a secret body.
 send_expect "gmail +send --subject --draft with secret blocked (draft token-confusion)" 1 0 -- $G gmail +send --to a@example.com --subject --draft --body "$(cat "$FIX/secret.txt")"
+# reply-all is a send like any other: it must be gated, not pass through.
+send_expect "gmail +reply-all secret blocked" 1 0 -- $G gmail +reply-all --to a@example.com --body "$(cat "$FIX/secret.txt")"
+send_expect "gmail +reply-all clean passes" 0 1 -- $G gmail +reply-all --to a@example.com --body "$(cat "$FIX/clean.txt")"
+# +forward is contract-covered: a regression in its shim routing must fail loudly.
+send_expect "gmail +forward secret blocked" 1 0 -- $G gmail +forward --to a@example.com --body "$(cat "$FIX/secret.txt")"
+send_expect "gmail +forward clean passes" 0 1 -- $G gmail +forward --to a@example.com --body "$(cat "$FIX/clean.txt")"
+# "--" end-of-options must not let content dodge the parser: post-"--"
+# positionals are gated as body.
+send_expect "gmail +send --body -- secret blocked (-- parser bypass)" 1 0 -- $G gmail +send --to a@example.com --body -- "$(cat "$FIX/secret.txt")"
+send_expect "gmail +send --body -- clean passes" 0 1 -- $G gmail +send --to a@example.com --body -- "$(cat "$FIX/clean.txt")"
+# drafts send: draft creation is ungated by design, so the send step gates
+# the draft's decoded body. A draft carrying a secret must be blocked.
+send_expect "gmail drafts send with secret draft body blocked" 1 0 -- env FAKE_DRAFT_BODY=secret $G gmail users drafts send --params '{"id":"d1"}'
+send_expect "gmail drafts send with clean draft body passes" 0 1 -- env FAKE_DRAFT_BODY=clean $G gmail users drafts send --params '{"id":"d1"}'
+# settings-plane mutations redirect where mail goes: approval-gated.
+send_expect "gmail settings updateAutoForwarding refused w/o approval" 2 0 -- $G gmail users settings updateAutoForwarding --params '{}'
+send_expect "gmail settings updateAutoForwarding allowed with approval" 0 1 -- env MOCHI_EGRESS_APPROVED=1 $G gmail users settings updateAutoForwarding --params '{}'
+send_expect "gmail settings get passes through (read-only)" 0 1 -- $G gmail users settings getAutoForwarding
 
 send_expect "messenger send clean passes" 0 1 -- $M send --cid '999' --text-stdin < "$FIX/clean.txt"
 send_expect "messenger send secret blocked" 1 0 -- $M send --cid '999' --text-stdin < "$FIX/secret2.txt"
+send_expect "messenger edit secret blocked" 1 0 -- $M edit --cid '999' --text-stdin < "$FIX/secret2.txt"
+send_expect "messenger edit clean passes" 0 1 -- $M edit --cid '999' --text-stdin < "$FIX/clean.txt"
+send_expect "messenger send --text -- secret blocked (-- parser bypass)" 1 0 -- $M send --cid '999' --text -- "$(cat "$FIX/secret2.txt")" < /dev/null
 send_expect "messenger threads passes through" 0 1 -- $M threads --limit 1 < /dev/null
 
 send_expect "drive permissions create refused w/o approval" 2 0 -- $G drive permissions create --params '{}'
@@ -507,6 +577,12 @@ out="$($M send --cid '999' --text-stdin < "$FIX/clean.txt" 2>/dev/null)"
 replayed="$(printf '%s' "$out" | sed -n '/---stdin---/,/---endstdin---/p' | sed '1d;$d')"
 if [ "$replayed" = "$(cat "$FIX/clean.txt")" ]; then ok "messenger stdin replayed byte-identical on allow"
 else bad "messenger stdin replay mismatch" "" "the shim altered stdin when replaying to the real binary. Inspect the shim's stdin handling before it reaches the delegate."; fi
+# Gate-decision logging is a contract requirement (gate-interface.md):
+# after this suite's blocked sends, the temp gate log must exist and carry
+# BLOCKED verdicts. A gate that stopped logging would otherwise go unnoticed.
+if [ -f "$T/gate.log" ] && grep -q "BLOCKED" "$T/gate.log" 2>/dev/null; then
+  ok "gate decisions logged during red-team (contract)"
+else bad "gate log has no BLOCKED decisions after red-team sends" "" "the contract requires every gate decision to be logged to \$MOCHI_EGRESS_LOG. Check that bin/egress-gate appends its verdict line on every invocation."; fi
 else
 # --- live-fire: small representative subset, real sends to the owner's own accounts ---
 # Payloads are the same synthetic fixtures; only the transport is real.
@@ -630,8 +706,11 @@ if [ "${MOCHI_MEMORY_AUDIT:-0}" = "1" ]; then
   audit_out="$("$MEM_SKILL/bin/memory-audit" 2>&1)"; arc=$?
   if [ "$arc" -eq 0 ]; then ok "memory-audit green"
   else
-    detail="$(printf '%s\n' "$audit_out" | grep -E '^  (/|!)' | head -12)"
-    bad "memory-audit reported findings (judge public vs private yourself)" "$detail" "classify each finding public vs private first; only private items need action. See the memory skill's references/data-protection.md."
+    # Never republish memory-audit evidence verbatim: its finding lines can
+    # carry the very private literals being detected (the validator must not
+    # amplify a leak). Counts only — the operator reads the tool's own output.
+    flagged="$(printf '%s\n' "$audit_out" | grep -cE '^  (/|!)' || true)"
+    bad "memory-audit reported findings (judge public vs private yourself)" "$flagged flagged line(s) — see the tool's own output locally; finding text is not republished here" "classify each finding public vs private first; only private items need action. See the memory skill's references/data-protection.md."
   fi
 else skip "memory-audit run" "set MOCHI_MEMORY_AUDIT=1 to include"; fi
 
@@ -691,19 +770,22 @@ begin_suite "D" "Gate audit-log review"
 if [ -f "$REAL_LOG" ]; then
   total="$(wc -l < "$REAL_LOG")"
   printf '%s\n' "$total gate decisions logged" | wdetail
-  for v in BLOCKED needs-approval approved-override; do
+  for v in BLOCKED needs-approval approved-override detector-error; do
     n="$(grep -c "| $v$" "$REAL_LOG" 2>/dev/null || true)"
     [ "$n" -gt 0 ] && printf '%s\n' "$v: $n" | wdetail
   done
+  # Contexts are never republished: on real installations they carry
+  # recipient addresses and free-form brief task text. Counts only — the
+  # operator reviews the log locally.
   if grep -q "| approved-override$" "$REAL_LOG"; then
-    printf '%s\n' "--- overrides (need human review) ---" | wdetail
-    grep "| approved-override$" "$REAL_LOG" | tail -5 | wdetail
+    printf '%s\n' "--- overrides: $(grep -c "| approved-override$" "$REAL_LOG") logged (contexts withheld — review the log locally) ---" | wdetail
   fi
   if grep -q "| BLOCKED$" "$REAL_LOG"; then
-    printf '%s\n' "--- blocked attempts ---" | wdetail
-    grep "| BLOCKED$" "$REAL_LOG" | tail -5 | wdetail
+    printf '%s\n' "--- blocked attempts: $(grep -c "| BLOCKED$" "$REAL_LOG") logged (contexts withheld) ---" | wdetail
   fi
-  ok "gate log reviewed"
+  if [ "$total" -gt 0 ]; then ok "gate log reviewed ($total decisions)"
+  else warn "gate log is empty — the gate has not been exercised in real operation" "an empty log cannot prove the gate is actually wired into daily operation (the A7 bypass scenario). Verify the shim PATH is honored by scheduled workers, then re-run."
+  fi
 else skip "gate log not found" "$(shorten "$REAL_LOG") (no sends attempted yet)"; fi
 
 end_suite
@@ -721,6 +803,9 @@ printf '%s\n' "- A7 cron PATH check is static/syntactic: it proves the mandate i
 printf '%s\n' "- bare 9-digit SSN shapes are flagged (deliberately conservative) — false-positive risk documented as scenario E3"
 printf '%s\n' "- attachment/binary inspection: open gap (B4) — attachments are not unpacked or scanned"
 printf '%s\n' "- nested/part-level encodings inside MIME: the shim decodes the outer \`raw\` once; a secret inside a base64 MIME part (or any non-base64 encoding) is not decoded — known gap"
+printf '%s\n' "- gmail messages import/insert: NOT gated (open gap) — only send/update paths are intercepted"
+printf '%s\n' "- chat/calendar/settings-plane beyond Gmail settings mutations: no shim coverage (open gap)"
+printf '%s\n' "- malformed/undecodable raw-MIME send: refuses closed (the malformed mail is dropped, not leaked) — the trade-off is visible by design"
 } | wdetail
 
 end_suite

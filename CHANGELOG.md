@@ -3,6 +3,32 @@
 Brief per-iteration notes. Each iteration: all 10 personas review in
 parallel → synthesis → one focused diff → full validation → one commit.
 
+## Iteration 9 — Fail-closed gates + red-team coverage of critical send paths
+
+Every way a send could dodge the gate is now closed, tested, and pinned:
+abnormal detector exits fail closed (rc outside {0,1,2} → blocked), and
+every critical send path — reply-all, forward, `--`, drafts send,
+settings mutations, messenger edit — is red-teamed with fake delegates.
+
+- **Audit:** fail-closed probes (crashing/killed detectors) on both
+  gates for every target; probes for `+reply-all`, `+forward`, post-`--`
+  positionals, `users drafts send` (fake read-only drafts-get), settings
+  mutations, and messenger `edit`; gate-decision logging mechanically
+  asserted; memory-audit and gate-log evidence reduced to counts; empty
+  gate log warns instead of passing silently; `WARNINGS` machine sentinel.
+- **Stub:** both gates log every decision, so the logging assertion runs
+  against the stub too.
+- **Report:** fixed the `[B] [B]` double prefix; ATTENTION-via-adversarial
+  always ships a finding; skipped checks no longer double-counted as
+  "other"; warnings shown in the hero; redundant UTC parenthetical
+  dropped.
+- **CI:** composition pinned (`@@@ TOTAL 83 0 4`, `@@@ ADV MATCHED 36/36`)
+  — deleting checks or corpus cases can no longer stay green.
+- **Docs:** gate-interface.md pins the new paths and the fail-closed
+  rule; attack-surface.md gains A9–A13 and names `import`/`insert` and
+  chat/calendar as open gaps; residuals converged across README,
+  attack-surface.md, and suite E; ITERATIONS.md reordered and completed.
+
 ## Iteration 8 — Report integrity and readability
 
 The report now tells the truth in plain language and is readable by

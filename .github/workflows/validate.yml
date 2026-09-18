@@ -15,6 +15,11 @@
 #   workflow additionally fails fast if any live-fire variable is present.
 # - No repository secrets are used or needed.
 #
+# Iteration-9 "composition pinning": the workflow asserts the audit total
+# (@@@ TOTAL) and the adversarial figure (@@@ ADV MATCHED) equal their
+# pinned values, so deleting checks or corpus cases cannot stay green.
+# When the harness intentionally gains or loses checks, the pin is updated
+# in the same commit as the check change.
 # Iteration-6 "CI fails honest": this workflow tells the truth in both
 # colors. Every component step runs even when an earlier component is red
 # (fail-at-the-end via `if: always()`), captures its exit code to an rc
@@ -194,6 +199,44 @@ jobs:
           echo "$fail" > "${{ runner.temp }}/rc/skip-assert"
           exit 0
 
+      - name: Assert pinned validation composition (no vacuous green)
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
+          # Deleting audit cases or corpus cases must not stay green. The
+          # pinning comes from machine sentinels, never prose greps; when the
+          # harness intentionally gains or loses checks, this pin is updated
+          # in the same commit as the check change.
+          # Pinned as of the iteration that added fail-closed detector probes
+          # plus red-team coverage of reply-all / -- / drafts send / settings
+          # mutations / messenger edit (stub target: 87 checks total, 4 of
+          # which are the pinned CI skips; adversarial corpus: 36 cases).
+          fail=0
+          if [ ! -f "${{ runner.temp }}/audit.log" ]; then
+            echo "validate: FAIL — audit.log missing (audit did not run)" >&2; fail=1
+          else
+            t="$(grep -a '^@@@ TOTAL ' "${{ runner.temp }}/audit.log" | tail -n 1 || true)"
+            if [ "$t" = "@@@ TOTAL 83 0 4" ]; then
+              echo "validate: audit composition pinned (83 passed · 0 failed · 4 skipped)"
+            else
+              echo "validate: FAIL — expected '@@@ TOTAL 83 0 4', got '$t'" >&2; fail=1
+            fi
+          fi
+          if [ ! -f "${{ runner.temp }}/adversarial.log" ]; then
+            echo "validate: FAIL — adversarial.log missing (suite did not run)" >&2; fail=1
+          else
+            a="$(grep -a '^@@@ ADV MATCHED ' "${{ runner.temp }}/adversarial.log" | tail -n 1 || true)"
+            if [ "$a" = "@@@ ADV MATCHED 36/36" ]; then
+              echo "validate: adversarial composition pinned (36/36 cases matched)"
+            else
+              echo "validate: FAIL — expected '@@@ ADV MATCHED 36/36', got '$a'" >&2; fail=1
+            fi
+          fi
+          echo "$fail" > "${{ runner.temp }}/rc/composition-assert"
+          exit 0
+
       - name: Run the adversarial suite against the synthetic stub
         if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
         timeout-minutes: 5
@@ -257,6 +300,7 @@ jobs:
           rc() { local f="$RC_DIR/$1"; [ -f "$f" ] && cat "$f" || echo "not-run"; }
           SYNTAX_RC="$(rc syntax)"; BLOCKSET_RC="$(rc blockset)"
           AUDIT_RC="$(rc audit)"; SKIP_RC="$(rc skip-assert)"
+          COMP_RC="$(rc composition-assert)"
           ADV_RC="$(rc adversarial)"; REP_RC="$(rc report)"
 
           audit_detail="audit figures unavailable — see step log"
@@ -290,6 +334,9 @@ jobs:
             fi
           fi
 
+          comp_detail="composition figures unavailable — see step log"
+          comp_detail="$( [ -f "$RC_DIR/composition-assert" ] && [ "$(cat "$RC_DIR/composition-assert")" = "0" ] && echo "audit 83/0/4 + adversarial 36/36 pinned" || echo "$comp_detail" )"
+
           rep_detail="report not generated"
           if [ "${{ steps.report.outputs.report_exists }}" = "true" ]; then
             case "$REP_RC" in
@@ -315,6 +362,7 @@ jobs:
             [ "$BLOCKSET_RC" != "0" ] && red="$red blockset"
             [ "$AUDIT_RC" != "0" ] && red="$red audit"
             [ "$SKIP_RC" != "0" ] && red="$red skip-assert"
+            [ "$COMP_RC" != "0" ] && red="$red composition-assert"
             [ "$ADV_RC" != "0" ] && red="$red adversarial"
             case "$REP_RC" in 0|1) ;; *) red="$red report";; esac
             [ "${{ steps.report.outputs.report_exists }}" != "true" ] && red="$red report(missing)"
@@ -336,6 +384,7 @@ jobs:
             echo "| Blockset | $(mark "$BLOCKSET_RC") | build-blockset.sh --check (blockset current) |"
             echo "| Audit | $(mark "$AUDIT_RC") | $audit_detail |"
             echo "| Pinned CI skips | $(mark "$SKIP_RC") | $skip_detail |"
+            echo "| Pinned composition | $(mark "$COMP_RC") | $comp_detail |"
             echo "| Adversarial | $(mark "$ADV_RC") | $adv_detail |"
             echo "| Report | $(mark "$REP_RC") | $rep_detail |"
             echo "| Artifact | $art_detail | leakage-validation.html |"
@@ -365,6 +414,7 @@ jobs:
           check "blockset check" "$(rc blockset)"
           check "audit" "$(rc audit)"
           check "skip-set assertion" "$(rc skip-assert)"
+          check "composition assertion" "$(rc composition-assert)"
           check "adversarial corpus" "$(rc adversarial)"
           # Report: exit 1 means findings with a written report (diagnostic;
           # still red overall via the audit/adversarial rc). Only 2/3 or a

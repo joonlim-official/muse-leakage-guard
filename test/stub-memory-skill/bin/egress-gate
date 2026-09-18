@@ -3,8 +3,10 @@
 # Same CLI contract as the real gate (references/gate-interface.md,
 # interface version 1): scans --content-file (or stdin) through
 # bin/memory-egress-check and applies the MOCHI_EGRESS_APPROVED=1
-# override for review-tier. This is a test double for harness
-# self-consistency checks — it is not a protection layer.
+# override for review-tier. Any detector exit outside {0,1,2} (crash,
+# signal, missing interpreter) fails closed as BLOCKED — a broken
+# detector must never read as "clean".
+# This is a test double for harness self-consistency checks — it is not a protection layer.
 set -u
 STUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTENT=""; APPROVED=0; CTX=""
@@ -17,17 +19,31 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "${MOCHI_EGRESS_APPROVED:-}" = "1" ] && APPROVED=1
+# Contract logging (gate-interface.md): every decision is appended to
+# $MOCHI_EGRESS_LOG as "timestamp | context | verdict".
+LOG="${MOCHI_EGRESS_LOG:-$STUB_DIR/gate.log}"
+ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+log_verdict() { printf '%s | %s | %s\n' "$ts" "${CTX:-no context}" "$1" >> "$LOG"; }
 if [ -n "$CONTENT" ]; then
   "$STUB_DIR/bin/memory-egress-check" "$CONTENT" >/dev/null 2>&1; RC=$?
 else
   "$STUB_DIR/bin/memory-egress-check" >/dev/null 2>&1; RC=$?
 fi
 if [ "$RC" -eq 1 ]; then
+  log_verdict "BLOCKED"
   echo "egress-gate(stub): BLOCK — block-tier content (${CTX:-no context})" >&2
   exit 1
 fi
 if [ "$RC" -eq 2 ] && [ "$APPROVED" -ne 1 ]; then
+  log_verdict "needs-approval"
   echo "egress-gate(stub): REVIEW — approval required (${CTX:-no context})" >&2
   exit 2
 fi
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 1 ] && [ "$RC" -ne 2 ]; then
+  # Fail closed: abnormal detector exit is not a verdict.
+  log_verdict "detector-error"
+  echo "egress-gate(stub): detector exited abnormally (rc=$RC); failing closed (${CTX:-no context})" >&2
+  exit 1
+fi
+if [ "$RC" -eq 2 ]; then log_verdict "approved-override"; else log_verdict "clean"; fi
 exit 0
