@@ -96,7 +96,7 @@ catalog's A/B/C/D/E scenario IDs.
 ## What a real run reports
 
 `bin/leakage-report [--out PATH]` runs the audit and writes a
-mobile-friendly HTML report. Per suite: a one-sentence green/red callout,
+mobile-friendly HTML report. Per suite: a one-sentence plain-language callout,
 with the full per-check evidence expandable underneath — the real input
 that was fed, the real output the gate returned, and, for every failure,
 the finding plus a concrete suggested remediation. Exits with the audit's

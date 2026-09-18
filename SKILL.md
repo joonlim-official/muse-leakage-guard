@@ -19,7 +19,7 @@ leakage-protection step of the memory skill's daily health check.
 `bin/leakage-report [--out PATH]` — runs the full audit and writes a
 mobile-friendly HTML outcome report (default:
 `hidden_files/reports/leakage-validation-<timestamp>.html`). Each suite
-gets a one-sentence green/red callout derived from the actual run
+gets a one-sentence plain-language callout derived from the actual run
 (e.g. "🟢 Gate effectiveness: 29 of 29 green."), with the full per-check
 evidence expandable underneath, plus a detection-performance card from
 bin/adversarial-run. Exit 0 = CLEAN and all adversarial cases matched;

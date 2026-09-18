@@ -74,6 +74,10 @@ while IFS='|' read -r name want content; do
   got="$(timeout -k 5 10 "$GATE" "$TMPF" >/dev/null 2>&1; echo $?)"
   if [ "$got" = 124 ]; then
     fail=$((fail+1))
+    # A hung gate is a failure of the tier the case expected: attribute it
+    # there so per-tier denominators partition the headline total (a 2-case
+    # corpus where both cases hang must not render block-tier 0/0).
+    case "$want" in 1) f1=$((f1+1));; 2) f2=$((f2+1));; 0) f0=$((f0+1));; esac
     failed_cases="${failed_cases}  MISMATCH $name: want rc=$want, got TIMEOUT (gate hung >10s)\n"
     printf '@@@ ADV MISMATCH %s want=%s got=TIMEOUT\n' "$name" "$want"
     printf '  MISMATCH %-16s want rc=%s got TIMEOUT (gate hung >10s)\n' "$name" "$want" >&2

@@ -219,16 +219,58 @@ else:
             g = list(map(int, tm.groups()))
             adv["tiers"] = {"block": (g[0], g[1]), "review": (g[2], g[3]), "clean": (g[4], g[5])}
 
-clean = (verdict_word == "CLEAN" and adv_rc == 0)
+clean = (verdict_word == "CLEAN" and adv_rc == 0 and adv is not None)
 badge_word = verdict_word if verdict_word in ("CLEAN", "ATTENTION") else "INCOMPLETE"
-if adv_rc != 0 and badge_word == "CLEAN":
-    # The audit was green but the adversarial suite mismatched: the badge
-    # must not say CLEAN. ATTENTION, with the red F card auto-expanded.
+if (adv_rc != 0 or adv is None) and badge_word == "CLEAN":
+    # The audit was green but the adversarial suite mismatched — or the
+    # runner exited 0 without emitting parseable figures: the badge must
+    # not say CLEAN. ATTENTION, with the red F card auto-expanded.
     badge_word = "ATTENTION"
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 def scrub(s):
     return EMAIL_RE.sub("[redacted]", s)
+
+def plain_evidence(s):
+    # Plain-language replacements for machine tokens in evidence text.
+    s = scrub(s)
+    s = s.replace("invoked=0", "real tool never called")
+    s = s.replace("invoked=1", "delivered normally")
+    return s
+
+def fmt_ts(ts):
+    # "2026-09-18 00:04 UTC" -> local time plus the UTC original.
+    try:
+        from datetime import datetime, timezone
+        m = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2})", ts)
+        if not m:
+            return ts
+        dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%Y-%m-%d %-I:%M %p %Z") + f" ({m.group(1)} UTC)"
+    except Exception:
+        return ts
+
+# Plain-language glosses for the known-residual notes (card E). Keyed on
+# distinctive substrings of the audit's residual text; the technical note
+# stays visible as a secondary line so nothing is hidden.
+RESIDUAL_GLOSS = [
+    ("browser-task sends", "Sends made by the browser assistant run on a different machine the technical guards can't reach — covered by written instructions only."),
+    ("absolute-path bypass of shims", "Calling a tool by its full file path can skip the guard — forbidden by policy, but not technically blockable."),
+    ("voice calls", "Voice calls are covered by the phone tool's own confirmation step, not by this text check."),
+    ("brief-gate runs on mandate", "Task briefs are checked by policy, not by intercepting system calls — a brief that evades the checker's patterns won't be caught."),
+    ("compositional/chunked exfiltration", "Data split across multiple sends can't be caught — each send is judged on its own."),
+    ("out-of-band egress", "If data leaves through a tool this check doesn't watch (like a raw web request), this check can't stop it."),
+    ("A7 cron PATH check is static", "The scheduled-task check only verifies the safety instructions are written down — not that every scheduled run followed them."),
+    ("bare 9-digit SSN shapes are flagged", "Plain 9-digit numbers are flagged as possible SSNs on purpose — this can flag innocent numbers too."),
+    ("attachment/binary inspection", "File attachments are not opened or scanned — a secret inside an attachment won't be caught."),
+    ("nested/part-level encodings inside MIME", "A secret hidden inside an encoded email attachment won't be decoded and checked."),
+]
+
+def gloss(note):
+    for key, plain in RESIDUAL_GLOSS:
+        if key in note:
+            return plain
+    return None
 
 def ci_lower_95(k, n):
     # Exact two-sided 95% Clopper-Pearson lower bound for the perfect k==n
@@ -257,17 +299,28 @@ def callout(s):
         mm, tt = adv["matched"], adv["total"]
         if mm == tt:
             if stub:
-                return (f"\U0001F7E3 Stub consistency: {mm}/{tt} corpus cases matched expected verdicts "
-                        "against the synthetic test double \u2014 harness self-check, not detector validation.")
-            return f"\U0001F7E2 Detection performance: {mm}/{tt} corpus cases matched expected verdicts."
-        return f"\U0001F534 Detection performance: {tt - mm} of {tt} corpus cases mismatched."
+                return (f"\U0001F7E3 Stub consistency: {mm}/{tt} matched — "
+                        "harness self-check, not detector validation.")
+            return f"\U0001F7E2 Detection performance: {mm}/{tt} attack test cases matched the expected result."
+        return f"\U0001F534 Detection performance: {tt - mm} of {tt} attack test cases mismatched — needs attention."
     if f:
-        return f"\U0001F534 {n}: {f} of {p + f + sk} failed — red, needs attention."
+        return f"\U0001F534 {n}: {f} of {p + f + sk} failed — needs attention."
     if "residual" in s["name"].lower():
         # Tracked residuals are NOT a protection claim: neutral treatment.
-        # Yellow is reserved for approval-gated (protected through approval).
-        return (f"\u26AA {n}: {len(s['notes'])} known paths reported and tracked — none silent "
-                "(tracked residual, not a protection claim).")
+        return (f"\u26AA Known gaps: {len(s['notes'])} things this check can't cover — "
+                "listed openly, none hidden.")
+    # Gate-effectiveness card: tri-state counts, so approval-gated (rc=2)
+    # checks are never reported as plain green.
+    if s["letter"] == "B" and s["checks"]:
+        groups = tri_state_groups(s["checks"])
+        nb, ng, npt, no = (len(groups[0][1]), len(groups[1][1]), len(groups[2][1]), len(groups[3][1]))
+        parts = []
+        if nb: parts.append(f"{nb} blocked outright")
+        if ng: parts.append(f"{ng} protected through approval")
+        if npt: parts.append(f"{npt} allowed normally")
+        if no: parts.append(f"{no} other")
+        tail = f", {sk} skipped" if sk else ""
+        return f"\U0001F7E2\U0001F7E1 {n}: " + " · ".join(parts) + tail + "."
     if p == 0 and f == 0 and sk == 0:
         if s["notes"] or s["ctx"]:
             return f"\u26AA {n}: no checks ran — tracked notes only, not a protection claim."
@@ -291,7 +344,7 @@ def tested_blurb(s):
             blurb = "Stub target \u2014 " + blurb.replace("gate binaries present", "stub gate binaries present")
         return blurb
     if letter == "B":
-        transport = ("simulated through fake real binaries — nothing was sent" if mode == "SIMULATED"
+        transport = ("attack tests run against fake stand-ins — nothing was actually sent" if mode == "SIMULATED"
                      else "live-fire subset over the genuine shim \u2192 gate \u2192 real-binary path to the owner's own accounts" if mode == "LIVE-FIRE"
                      else "transport unverified (mode unknown)")
         return (f"{total_n} red-team checks ({transport}). Block-tier payloads must be refused with rc=1 and the real binary uninvoked; "
@@ -306,14 +359,14 @@ def tested_blurb(s):
         n = next((c for c in s["ctx"] if "gate decisions logged" in c), "")
         return f"Gate audit log reviewed{f' ({n})' if n else ''}; blocked attempts and approval overrides surfaced in the evidence."
     if letter == "E":
-        return "Residual paths with no technical choke point, tracked openly: " + "; ".join(s["notes"]) + "."
+        return "These are the known gaps this check can't cover. Each is listed below — none are hidden."
     if letter == "F":
         if adv is None or "tiers" not in adv:
             return "Adversarial runner did not produce figures — see the raw transcript."
         b, r, c = adv["tiers"]["block"], adv["tiers"]["review"], adv["tiers"]["clean"]
-        blurb = (f"{adv['matched']}/{adv['total']} corpus cases matched expected verdicts "
-                f"(block-tier pass {b[0]}/{b[1]}, review-tier pass {r[0]}/{r[1]}, clean pass {c[0]}/{c[1]}). "
-                f"These are pass rates over author-designed regression fixtures — not a real-world sample, "
+        blurb = (f"{adv['matched']}/{adv['total']} attack test cases matched expected results "
+                f"(block-tier {b[0]}/{b[1]}, review-tier {r[0]}/{r[1]}, clean {c[0]}/{c[1]}). "
+                f"Pass rates over {adv['total']} author-designed test cases — not a real-world sample, "
                 f"and not ML recall/precision. Detector check — no sends in either mode.")
         if stub:
             blurb = ("Stub target \u2014 " + blurb.replace("Detector check", "harness self-consistency check against the test double")
@@ -328,7 +381,9 @@ findings = []
 for s in suites:
     for c in s["checks"]:
         if c["st"] == "\u2717":
-            ev = scrub(c["ev"][0]) if c["ev"] else ""
+            # All evidence lines, not just the first — suggestions and
+            # context after ev[0] must not be silently dropped.
+            ev = "<br>".join(html.escape(plain_evidence(e)) for e in c["ev"])
             findings.append((f"[{s['letter']}] {scrub(c['text'])}", ev, s["letter"]))
 for name, want, got in mismatches:
     findings.append((f"[F] adversarial mismatch {name}: want rc={want}, got rc={got}", "", "F"))
@@ -338,11 +393,11 @@ def ev_item(c):
     st = c["st"]
     cls = "pass" if st == chr(0x2713) else ("skip" if st == chr(0x2013) else "fail")
     word = "Pass" if st == chr(0x2713) else ("Skipped" if st == chr(0x2013) else "Fail")
+    evs = "".join(f'<br><span class="cev">{html.escape(plain_evidence(e))}</span>' for e in c["ev"])
     return (f'<li class="{cls}">'
             f'<span class="mark" aria-hidden="true">{st}</span>'
             f'<span class="vh">{word}: </span>'
-            f'<span>{html.escape(scrub(c["text"]))}'
-            + (f'<br><span class="cev">{html.escape(scrub(c["ev"][0]))}</span>' if c["ev"] else "")
+            f'<span>{html.escape(plain_evidence(c["text"]))}{evs}'
             + "</span></li>")
 
 def ev_list(checks):
@@ -364,8 +419,8 @@ def tri_state_groups(checks):
             passthru.append(c)
         else:
             other.append(c)
-    return [("Hard-block evidence \u2014 refused outright (rc=1)", block),
-            ("Approval-gated evidence \u2014 refused without explicit approval (rc=2)", gated),
+    return [("\U0001F7E2 Hard-block evidence \u2014 refused outright (rc=1)", block),
+            ("\U0001F7E1 Approval-gated evidence \u2014 refused without explicit approval (rc=2)", gated),
             ("Pass-through evidence \u2014 allowed (rc=0)", passthru),
             ("Other evidence", other)]
 
@@ -387,10 +442,32 @@ def render_card(s, extra=""):
     co = callout(s)
     emoji, rest = co.split(" ", 1)
     lid = f"callout-{s['letter']}"
-    subtotal = (f'<span class="subtotal">{p} passed \u00b7 {f} failed \u00b7 {sk} skipped</span>'
-                if (p + f + sk) else "")
-    ctx = "".join(f"<li>{html.escape(scrub(c))}</li>" for c in s["ctx"])
-    if s["letter"] == "B" and s["checks"]:
+    # Subtotal: dropped on ok/stub cards where the callout already encodes
+    # the numbers; kept on red/skip/residual cards where it adds information.
+    if "residual" in s["name"].lower():
+        subtotal = (f'<span class="subtotal">{len(s["notes"])} tracked \u00b7 0 hidden</span>')
+    elif cls in ("ok", "stub"):
+        subtotal = ""
+    else:
+        subtotal = (f'<span class="subtotal">{p} passed \u00b7 {f} failed \u00b7 {sk} skipped</span>'
+                    if (p + f + sk) else "")
+    ctx = "".join(f"<li>{html.escape(plain_evidence(c))}</li>" for c in s["ctx"])
+    if s["letter"] == "D" and s["ctx"]:
+        # The blurb promises blocked attempts and approval overrides in the
+        # evidence — render the gate-log context lines as the evidence list.
+        ev_html = (f'<ul class="evidence">{ev_list(s["checks"])}</ul>' if s["checks"] else "")
+        ev_html += f'<h3 class="ev-label">Gate decisions</h3><ul class="evidence">{ctx}</ul>'
+    elif "residual" in s["name"].lower() and s["notes"]:
+        lis = []
+        for n in s["notes"]:
+            g = gloss(n)
+            if g:
+                lis.append(f"<li><span>{html.escape(g)}</span><br><span class=\"cev\">{html.escape(scrub(n))}</span></li>")
+            else:
+                lis.append(f"<li>{html.escape(scrub(n))}</li>")
+        ev_html = (f'<h3 class="ev-label">Known gaps ({len(s["notes"])})</h3>'
+                   f'<ul class="evidence">{"".join(lis)}</ul>')
+    elif s["letter"] == "B" and s["checks"]:
         ev_html = "".join(
             f'<h3 class="ev-label">{html.escape(label)}</h3><ul class="evidence">{ev_list(g)}</ul>'
             for label, g in tri_state_groups(s["checks"]) if g)
@@ -401,17 +478,22 @@ def render_card(s, extra=""):
         ev_html = (f'<h3 class="ev-label">Full evidence ({n_items} '
                    f'{"item" if n_items == 1 else "items"})</h3>'
                    f'<ul class="evidence">{items or notes or ctx}</ul>') if n_items else ""
+    # Red cards render pre-expanded server-side so the evidence is reachable
+    # without JavaScript; the script below only enhances toggling.
+    expanded = "true" if cls == "red" else "false"
+    hid = "" if cls == "red" else " hidden"
+    open_cls = " open" if cls == "red" else ""
     cards.append(f"""
-    <section class="card {cls}" id="card-{s['letter']}" aria-labelledby="{lid}">
-      <button class="card-head" aria-expanded="false" aria-controls="detail-{s['letter']}">
+    <section class="card {cls}{open_cls}" id="card-{s['letter']}" aria-labelledby="{lid}">
+      <h2 class="callout-wrap"><button class="card-head" aria-expanded="{expanded}" aria-controls="detail-{s['letter']}">
         <span class="head-text">
-          <span class="callout" id="{lid}" role="heading" aria-level="2"><span aria-hidden="true">{emoji}</span> {html.escape(rest)}</span>
+          <span class="callout" id="{lid}"><span aria-hidden="true">{emoji}</span> {html.escape(rest)}</span>
           {subtotal}
         </span>
         <span class="chev" aria-hidden="true">\u25b8</span>
-      </button>
-      <div class="detail" id="detail-{s['letter']}" role="region" aria-labelledby="{lid}" hidden>
-        <p class="tested">{html.escape(tested_blurb(s))}</p>
+      </button></h2>
+      <div class="detail" id="detail-{s['letter']}" role="region" aria-labelledby="{lid}"{hid}>
+        <p class="tested"><span class="tlabel">Checked:</span> {html.escape(tested_blurb(s))}</p>
         {('<p class="ops-label">Operational notes</p><ul class="notes">' + ctx + "</ul>") if ctx and s["letter"] != "D" else ""}
         {extra}
         {ev_html}
@@ -442,25 +524,34 @@ if adv:
         okc = got == want
         cases.append((name, want, got))
         mark = "\u2713" if okc else "\u2717"
-        rows.append(f'<tr><th scope="row">{html.escape(name)}</th><td>rc={html.escape(want)}</td>'
+        rows.append(f'<tr class="{"mismatch" if not okc else ""}"><th scope="row">{html.escape(name)}</th><td>rc={html.escape(want)}</td>'
                     f'<td>rc={html.escape(got)}</td>'
                     f'<td class="{"cok" if okc else "cbad"}"><span aria-hidden="true">{mark}</span>'
                     f'<span class="vh">{"matched" if okc else "mismatched"}</span></td></tr>')
-    tier_line = ""
+    # Runner-only mismatches: a case the runner reported but the corpus file
+    # doesn't contain must not silently vanish from the table and matrix —
+    # that shape is corpus/runner drift, so label it as such.
+    corpus_names = {n for n, _, _ in cases}
+    for mname, want, got in mismatches:
+        if mname not in corpus_names:
+            cases.append((mname, want, got))
+            rows.append(f'<tr class="mismatch"><th scope="row">{html.escape(mname)}'
+                        '<br><span class="cev">not in corpus file — possible runner/corpus drift</span></th>'
+                        f'<td>rc={html.escape(want)}</td><td>rc={html.escape(got)}</td>'
+                        '<td class="cbad"><span aria-hidden="true">\u2717</span>'
+                        '<span class="vh">mismatched</span></td></tr>')
     ci_line = ""
     if "tiers" in adv:
         b, r, c = adv["tiers"]["block"], adv["tiers"]["review"], adv["tiers"]["clean"]
-        tier_line = (f'<p class="tiers">block-tier pass {b[0]}/{b[1]} \u00b7 review-tier pass {r[0]}/{r[1]} '
-                     f'\u00b7 clean pass {c[0]}/{c[1]}</p>')
         # Exact 95% CI context: small-n fixture sets have wide intervals even
         # at full pass rates. Stated plainly so a 19/19 is never read as
         # "certain".
         ci_bits = []
         for label, (k, n) in (("block-tier", b), ("review-tier", r), ("clean", c)):
             lb = ci_lower_95(k, n)
-            ci_bits.append(f"{label} \u2265 {lb:.2f} ({k}/{n})" if lb is not None
+            ci_bits.append(f"{label} \u2265 {lb:.2f}" if lb is not None
                            else f"{label}: interval not computed ({k}/{n})")
-        ci_line = ('<p class="tiers ci">Exact 95% CI lower bounds (Clopper-Pearson): '
+        ci_line = ('<p class="tiers ci">Worst case consistent with these results (95% lower bound): '
                    + " \u00b7 ".join(ci_bits) + ".</p>")
     # 3x3 expected-vs-actual exit-code confusion matrix.
     order = ["1", "2", "0"]
@@ -476,19 +567,18 @@ if adv:
         f'<tr><th scope="row">{html.escape(wnames[w])}</th>'
         + "".join(f"<td>{matrix[(w, g)]}</td>" for g in order) + "</tr>"
         for w in order)
-    matrix_html = ('<div class="tablewrap"><table class="cases matrix">'
+    matrix_html = ('<div class="tablewrap" tabindex="0" role="region" aria-label="Confusion matrix, scrollable">'
+                   '<table class="cases matrix">'
                    '<caption>Expected vs actual exit code (3\u00d73)</caption>'
-                   '<thead><tr><th scope="col">expected \\ actual</th>'
+                   '<thead><tr><th scope="col">expected vs actual</th>'
                    + "".join(f"<th scope=\"col\">{html.escape(gnames[g])}</th>" for g in order)
                    + "</tr></thead><tbody>" + mrows + "</tbody></table></div>")
     if nonstd:
         matrix_html += ('<p class="tiers">Non-standard verdicts (outside rc 1/2/0): '
                         + html.escape("; ".join(nonstd)) + ".</p>")
-    fixture_note = (f'<p class="tiers">The corpus is {adv["total"]} author-designed regression fixtures \u2014 '
-                    'not a real-world sample. These pass rates measure fixture conformance, '
-                    'not detector quality in the wild.</p>')
-    cases_html = (tier_line + ci_line + fixture_note + matrix_html
-                  + '<div class="tablewrap"><table class="cases"><caption>Per-case want vs got</caption><thead><tr>'
+    cases_html = (ci_line + matrix_html
+                  + '<div class="tablewrap" tabindex="0" role="region" aria-label="Per-case corpus results, scrollable">'
+                  '<table class="cases"><caption>Per-case want vs got</caption><thead><tr>'
                   '<th scope="col">case</th><th scope="col">expected exit code</th><th scope="col">actual exit code</th>'
                   '<th scope="col">match</th></tr></thead><tbody>'
                   + "".join(rows) + "</tbody></table></div>")
@@ -510,8 +600,8 @@ findings_html = ""
 if findings:
     rows = "".join(
         f'<li><strong>{html.escape(t)}</strong> '
-        f'<a class="flink" href="#card-{html.escape(l)}">evidence \u2192</a>'
-        + (f'<br><span class="fev">{html.escape(e)}</span>' if e else "") + "</li>"
+        f'<a class="flink" href="#card-{html.escape(l)}" aria-label="Evidence for: {html.escape(t, quote=True)}">evidence \u2192</a>'
+        + (f'<br><span class="fev">{e}</span>' if e else "") + "</li>"
         for t, e, l in findings)
     findings_html = f"""
 <section class="findings" aria-labelledby="findings-h">
@@ -519,24 +609,31 @@ if findings:
   <ul>{rows}</ul>
 </section>"""
 
-# Tri-state verdict legend: green = well protected (block-tier), yellow =
-# protected through approval (review-tier), red = can leak. Purple marks
-# stub self-consistency (never a protection claim); white marks tracked
-# residuals (never silent, never a protection claim either).
-legend_html = """
-<section class="legend" aria-label="Verdict legend">
-  <span><span aria-hidden="true">\U0001F7E2</span> <strong>well protected</strong> \u2014 block-tier: refused outright (rc=1)</span>
-  <span><span aria-hidden="true">\U0001F7E1</span> <strong>protected through approval</strong> \u2014 review-tier: refused without explicit approval (rc=2)</span>
-  <span><span aria-hidden="true">\U0001F534</span> <strong>can leak</strong> \u2014 a check failed, or something that should have been stopped was not</span>
-  <span><span aria-hidden="true">\U0001F7E3</span> <strong>stub self-consistency</strong> \u2014 harness check against the synthetic test double, not a protection claim</span>
-  <span><span aria-hidden="true">\u26AA</span> <strong>tracked residual</strong> \u2014 known gap, reported openly, never silent</span>
-</section>"""
+# Verdict legend: only the treatments present in this report are shown, so a
+# green run doesn't pay above-the-fold space to states that didn't occur.
+# Green = well protected (checks passed; block-tier refused outright, rc=1),
+# yellow = protected through approval (review-tier, rc=2), red = can leak.
+# Purple marks stub self-consistency (never a protection claim); white marks
+# tracked residuals (never silent, never a protection claim either).
+uses_yellow = any(s["letter"] == "B" and re.search(r"rc=2", c["text"])
+                  for s in suites for c in s["checks"])
+legend_bits = ['<span><span aria-hidden="true">\U0001F7E2</span> <strong>well protected</strong> \u2014 checks passed; attacks refused outright (rc=1)</span>']
+if uses_yellow:
+    legend_bits.append('<span><span aria-hidden="true">\U0001F7E1</span> <strong>protected through approval</strong> \u2014 refused without explicit approval (rc=2)</span>')
+legend_bits.append('<span><span aria-hidden="true">\U0001F534</span> <strong>can leak</strong> \u2014 a check failed, or something that should have been stopped was not</span>')
+if stub:
+    legend_bits.append('<span><span aria-hidden="true">\U0001F7E3</span> <strong>stub self-consistency</strong> \u2014 harness check against the synthetic test double, not a protection claim</span>')
+legend_bits.append('<span><span aria-hidden="true">\u26AA</span> <strong>tracked residual</strong> \u2014 known gap, reported openly, never silent</span>')
+legend_bits.append('<span class="codes">rc=1 blocked outright \u00b7 rc=2 needs approval \u00b7 rc=0 allowed</span>')
+legend_html = '<section class="legend" aria-label="Verdict legend">' + "".join(legend_bits) + "</section>"
+if total[2]:
+    legend_html += '<p class="skipdef">Skipped = a check that didn\'t apply to this setup — not a failure.</p>'
 
 transcript_html = f"""
 <section class="transcript" aria-labelledby="transcript-h">
   <h2 id="transcript-h">Raw transcripts</h2>
-  <details><summary>bin/leakage-audit</summary><pre>{html.escape(scrub_transcript(text))}</pre></details>
-  <details><summary>bin/adversarial-run</summary><pre>{html.escape(scrub_transcript(adv_text))}</pre></details>
+  <details><summary>bin/leakage-audit</summary><pre tabindex="0" role="region" aria-label="bin/leakage-audit transcript, scrollable">{html.escape(scrub_transcript(text))}</pre></details>
+  <details><summary>bin/adversarial-run</summary><pre tabindex="0" role="region" aria-label="bin/adversarial-run transcript, scrollable">{html.escape(scrub_transcript(adv_text))}</pre></details>
 </section>"""
 
 # CI provenance (present only when generated inside GitHub Actions)
@@ -556,10 +653,17 @@ footer_text = ("Synthetic stub target \u2014 this report validates the harness a
                ("Real sends to the owner's own accounts \u2014 synthetic payloads only." if mode == "LIVE-FIRE"
                 else "Synthetic payloads only \u2014 nothing real was sent or disclosed."))
 
+verdict_def = {
+    "CLEAN": "CLEAN means every check passed — nothing that should have been stopped got through.",
+    "ATTENTION": "ATTENTION means something failed or couldn't be verified — see Findings at the top.",
+    "INCOMPLETE": "INCOMPLETE means the run didn't finish — treat as unverified.",
+}.get(badge_word, "")
+
 page = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Leakage validation \u2014 {badge_word}{" (synthetic stub)" if stub else ""}</title>
+<noscript><style>.detail{{display:block!important}}</style></noscript>
 <style>
 :root{{--bg:#f6f7f9;--fg:#1c1e21;--card:#fff;--mut:#565d66;--ok:#15803d;--bad:#b91c1c;
 --line:#e5e7eb;--hero1:#0f172a;--hero2:#1e3a5f}}
@@ -567,8 +671,17 @@ page = f"""<!DOCTYPE html>
 --mut:#9aa0a6;--ok:#4ade80;--bad:#f87171;--line:#2a2e35;--hero1:#020617;--hero2:#0c1a33}}}}
 *{{box-sizing:border-box}}body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 background:var(--bg);color:var(--fg);line-height:1.5}}
+a{{color:#1d4ed8}}
+@media(prefers-color-scheme:dark){{a{{color:#93c5fd}}}}
+a.skip{{position:absolute;left:12px;top:-48px;background:var(--card);color:var(--fg);padding:8px 14px;
+border-radius:8px;z-index:10;text-decoration:none;transition:top .15s}}
+a.skip:focus{{top:12px}}
+@media (prefers-reduced-motion: reduce){{a.skip{{transition:none}}}}
 .hero{{background:linear-gradient(135deg,var(--hero1),var(--hero2));color:#fff;padding:28px 20px}}
 .hero h1{{margin:0 0 4px;font-size:1.35rem}}.hero p{{margin:2px 0;color:#cbd5e1;font-size:.85rem}}
+.tagline{{font-size:1rem!important;color:#fff!important}}
+.tech{{font-size:.78rem!important}}
+.verdictdef{{font-size:.85rem;color:#e2e8f0;margin:10px auto 0;max-width:34em}}
 .badge{{display:inline-block;margin-top:10px;padding:6px 16px;border-radius:999px;font-weight:700;
 letter-spacing:.08em;font-size:.85rem}}
 .badge.ok{{background:#166534}}.badge.bad{{background:#991b1b}}
@@ -586,10 +699,14 @@ letter-spacing:.08em;font-size:.85rem}}
 border-radius:12px;padding:0;margin:12px 0}}
 .card.ok{{border-left-color:var(--ok)}}.card.red{{border-left-color:var(--bad)}}
 .card.stub{{border-left-color:#7c3aed}}
+.card.skip{{border-left-color:var(--mut)}}
 @media(prefers-color-scheme:dark){{.card.stub{{border-left-color:#a78bfa}}}}
 .legend{{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 20px;font-size:.78rem;
 background:var(--card);border-bottom:1px solid var(--line)}}
 .legend strong{{font-weight:700}}
+.legend .codes{{color:var(--mut);font-size:.75rem}}
+.skipdef{{font-size:.78rem;color:var(--mut);padding:8px 20px;margin:0;background:var(--card);border-bottom:1px solid var(--line)}}
+.callout-wrap{{margin:0;padding:0;font-size:1em;font-weight:inherit}}
 .card-head{{font:inherit;color:inherit;background:none;border:0;width:100%;text-align:left;
 padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;
 -webkit-tap-highlight-color:transparent;border-radius:12px}}
@@ -602,6 +719,7 @@ padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;
 .card.open .chev{{transform:rotate(90deg)}}
 .detail{{border-top:1px dashed var(--line);margin:0 16px 14px;padding-top:10px}}
 .tested{{margin:0 0 8px;font-size:.85rem}}
+.tlabel{{font-weight:700}}
 .ops-label,.ev-label{{margin:0;color:var(--mut);font-size:.78rem;font-weight:600}}
 .evidence,.notes{{list-style:none;margin:8px 0 0;padding:0;font-size:.82rem}}
 .evidence li,.notes li{{padding:5px 0;border-top:1px dashed var(--line);display:flex;gap:8px}}
@@ -612,15 +730,20 @@ padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;
 .findings h2{{margin:0 0 8px;font-size:1rem;color:var(--bad)}}
 .findings ul{{list-style:none;margin:0;padding:0;font-size:.85rem}}
 .findings li{{padding:6px 0;border-top:1px dashed var(--line)}}
-.flink{{font-size:.78rem;font-weight:600;white-space:nowrap}}
+.flink{{font-size:.78rem;font-weight:600;white-space:nowrap;padding:6px 10px;margin:-6px -10px;
+border-radius:6px;display:inline-block}}
+.flink:focus-visible,.tablewrap:focus-visible,.transcript pre:focus-visible{{outline:2px solid var(--ok);outline-offset:2px}}
 .fev{{color:var(--mut);font-size:.8rem}}
 .tiers{{font-size:.85rem;margin:0 0 8px}}
+.advline{{font-size:.9rem;margin:6px 0 0}}
 .tablewrap{{overflow-x:auto}}
 table.cases{{border-collapse:collapse;width:100%;font-size:.8rem;margin:4px 0 8px}}
 table.cases caption{{text-align:left;font-weight:600;font-size:.82rem;padding:6px 0 2px}}
 table.cases th,table.cases td{{border:1px solid var(--line);padding:4px 8px;text-align:left}}
 .cok{{color:var(--ok);font-weight:700}}.cbad{{color:var(--bad);font-weight:700}}
-.vh{{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}}
+tr.mismatch{{background:#fef2f2}}
+@media(prefers-color-scheme:dark){{tr.mismatch{{background:#3b1212}}}}
+.vh{{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}}
 .modebar.stub{{background:#ede9fe;color:#4c1d95;border-bottom:1px solid #c4b5fd}}
 @media(prefers-color-scheme:dark){{
 .modebar.stub{{background:#2e1065;color:#ddd6fe}}}}
@@ -628,7 +751,7 @@ table.cases th,table.cases td{{border:1px solid var(--line);padding:4px 8px;text
 padding:14px 16px;margin:16px 0;font-size:.8rem}}
 .transcript h2{{font-size:1rem;margin:0 0 8px}}
 .transcript details{{margin:8px 0}}
-.transcript summary{{cursor:pointer;font-weight:600}}
+.transcript summary{{cursor:pointer;font-weight:600;padding:10px 0}}
 .transcript summary:focus-visible{{outline:2px solid var(--ok);outline-offset:2px}}
 .transcript pre{{white-space:pre-wrap;word-break:break-word;background:var(--bg);
 border:1px solid var(--line);border-radius:8px;padding:10px;max-height:320px;overflow:auto;font-size:.75rem}}
@@ -636,21 +759,29 @@ border:1px solid var(--line);border-radius:8px;padding:10px;max-height:320px;ove
 margin:16px 0;text-align:center}}
 .total b{{font-size:1.1rem}}
 footer{{text-align:center;color:var(--mut);font-size:.75rem;padding:0 0 24px}}
+.meta .tgt{{overflow-wrap:anywhere}}
+@media(max-width:480px){{.hero{{padding:20px 16px}}.hero h1{{font-size:1.2rem}}.card-head{{padding:12px}}
+.detail{{margin:0 12px 12px}}.meta .tgt{{flex-basis:100%}}}}
+@media(min-width:1024px){{.wrap{{max-width:720px}}}}
 </style></head><body>
+<a class="skip" href="#main">Skip to main content</a>
 <header class="hero">
   <h1><span aria-hidden="true">\U0001F6E1\uFE0F</span> Leakage validation</h1>
-  <p>muse-leakage-guard \u00b7 bin/leakage-audit + bin/adversarial-run</p>
+  <p class="tagline">Automated privacy-protection check</p>
+  <p class="tech">muse-leakage-guard \u00b7 bin/leakage-audit + bin/adversarial-run</p>
   <span class="badge {"ok" if clean else "bad"}">{badge_word}</span>
-  <div class="meta"><span>{html.escape(ts)}</span><span>target: {html.escape(tgt)}</span>{stub_span}{ci_span}</div>
+  <p class="verdictdef">{html.escape(verdict_def)}</p>
+  <div class="meta"><span>{html.escape(fmt_ts(ts))}</span><span class="tgt">target: {html.escape(tgt)}</span>{stub_span}{ci_span}</div>
 </header>
 <div class="modebar {modebar[0]}">{modebar[1]}</div>
 {stubbar}
 {legend_html}
-<main class="wrap">
+<main class="wrap" id="main">
 {findings_html}
 {"".join(cards)}
-<div class="total"><b>Total: {total[0]} passed \u00b7 {total[1]} failed \u00b7 {total[2]} skipped</b>
-<p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">AUDIT VERDICT: {verdict_word}{" \u00b7 adversarial: " + str(adv["matched"]) + "/" + str(adv["total"]) + " matched" if adv else " \u00b7 adversarial: runner failed"}</p></div>
+<div class="total"><h2 class="vh">Overall result</h2><b>Total: {total[0]} audit checks passed \u00b7 {total[1]} failed \u00b7 {total[2]} skipped</b>
+{('<p class="advline">plus ' + str(adv["matched"]) + "/" + str(adv["total"]) + " attack tests matched</p>") if adv else ""}
+<p style="margin:6px 0 0;color:var(--mut);font-size:.8rem">AUDIT VERDICT: {verdict_word}</p></div>
 {transcript_html}
 </main>
 <footer>{html.escape(footer_text)}</footer>

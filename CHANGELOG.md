@@ -3,6 +3,60 @@
 Brief per-iteration notes. Each iteration: all 10 personas review in
 parallel → synthesis → one focused diff → full validation → one commit.
 
+## Iteration 8 — Report integrity and readability
+
+The report now tells the truth in plain language and is readable by
+everyone, including keyboard and screen-reader users.
+
+- **Badge integrity:** CLEAN requires audit CLEAN + adversarial rc 0 +
+  parseable figures. A runner that exits 0 without emitting figures
+  renders ATTENTION, not CLEAN.
+- **Card B (gate effectiveness):** tri-state callout — N blocked outright
+  · N protected through approval · N allowed normally — so rc=2
+  approval-gated checks are never reported as plain green. Evidence
+  grouped under 🟢/🟡/⚪ labels.
+- **Card D (gate audit-log review):** gate-log context (blocked attempts,
+  approval overrides) rendered as evidence, matching the card's promise.
+- **Card E (known gaps):** each residual gets a plain-language gloss with
+  the technical note retained underneath; "N tracked · 0 hidden".
+- **Plain language:** invoked=0/1 → "real tool never called"/"delivered
+  normally"; CLEAN/ATTENTION/INCOMPLETE defined under the badge; local
+  time shown with UTC original; known-gap jargon glossed.
+- **Adversarial card:** runner-only mismatches added as labeled drift
+  rows; matrix corner "expected vs actual"; "Worst case consistent with
+  these results (95% lower bound)" replaces the unexplained
+  Clopper-Pearson label.
+- **Accessibility:** skip link, h2-wrapped card headings, red cards
+  pre-expanded server-side (no-JS fallback CSS), keyboard-focusable
+  scroll regions and transcripts, unique finding link labels, focus
+  styles, light/dark link colors, labeled "Overall result" total.
+- **Adversarial runner:** timeout failures now count in the expected
+  tier's denominator (no more disappearing from tier totals).
+
+## Iteration 7 — Contract conformance
+
+The stub honors its contract; the audit enforces what the contract
+claims; the catalog and matrix say only what the suites enforce.
+
+- **Stub (test/stub-memory-skill):** GWS shim gates the stdin form of raw
+  MIME (was ungated fail-open); stdin bytes replayed byte-identical on
+  allow; `--draft`/`--dry-run` honored only as flags, never as flag
+  values (token-confusion bypass closed); drive `permissions create`
+  matched positionally; canonicalized delegate resolution + self-identity
+  refusal (fail closed); `+send` now gates `to` as well as subject/body;
+  `memory-egress-check` operational failures exit 1 (fail closed, never
+  approvable).
+- **Audit (bin/leakage-audit):** Suite A enforces `interface_version` as
+  the first check (mismatch → one FAIL, ATTENTION, exit 1); distinct-
+  delegate assertion by canonical path identity; stub-only operational-
+  failure approval isolation; suite B pins stdin-form blocked/clean,
+  draft token-confusion blocked, positional drive-match; live-fire sends
+  wrapped in `timeout -k 10 30`.
+- **Docs:** gate-interface.md gains machine-readable `contract_version:
+  1`; attack-surface.md C5 qualified (shimmed paths only), A7 marked
+  POLICY-ONLY, KNOWN GAP defined; test-matrix.md Covered-by corrections;
+  README residual list now all ten, matching suite E.
+
 ## Iteration 6 — CI fails honest
 
 The CI workflow now tells the truth in both colors — a red run produces
