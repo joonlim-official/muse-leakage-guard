@@ -805,6 +805,32 @@ printf '%s\n' "$(cat "$FIX/figure.txt")" > "$T/allow-figure.txt"
 guard_expect "allowlisted figure exempted" figure.txt 0 "$T/allow-figure.txt"
 printf '%s\n' "$(cat "$FIX/secret.txt")" > "$T/allow-secret.txt"
 guard_expect "allowlisted secret still blocked (allowlist never exempts secrets)" secret.txt 1 "$T/allow-secret.txt"
+# Public-pattern class exemptions (E1): the auditor can rule a literal CLASS
+# public (e.g. market-price quotes whose values change daily, so fixed
+# strings cannot cover them). Controlled pattern file and temp fixtures —
+# never the installation's real ones.
+printf '%s\n' 'MU ~\$[0-9,]+(\.[0-9]+)?' > "$T/pp.txt"
+printf 'MU ~$977 after the news\n' > "$T/market.txt"
+printf 'MU ~$977 after the news\nsk_live_4eC39HqLyjWDarjtT1zZzZzZzZz\n' > "$T/market-secret.txt"
+pp_expect() { # <name> <file> <want_rc> <gate: guard|egress>
+  local name="$1" f="$2" want="$3" gate="$4" rc gatebin
+  if [ "$gate" = guard ]; then gatebin="$MEM_SKILL/bin/memory-guard"
+  else gatebin="$MEM_SKILL/bin/memory-egress-check"; fi
+  rc="$(timeout -k 10 30 env "MEMORY_PUBLIC_PATTERNS=$T/pp.txt" "MEMORY_FIGURE_ALLOWLIST=/dev/null" "MEMORY_EGRESS_ALLOWLIST=/dev/null" "$gatebin" "$f" >/dev/null 2>&1; echo $?)"
+  if [ "$rc" -eq 124 ]; then
+    bad "$gate: $name" "$gate timed out after 30s (did not answer in time)" \
+      "investigate why $gate hung; do not trust verdicts until it answers."
+    return
+  fi
+  if [ "$rc" -eq "$want" ]; then ok "$gate: $name (rc=$rc)"
+  else bad "$gate: $name" "want rc=$want, got rc=$rc" \
+    "check the public-pattern exemption in the target's $gatebin, then re-run this audit."
+  fi
+}
+pp_expect "public-pattern market price exempted" "$T/market.txt" 0 guard
+pp_expect "public pattern never exempts secrets" "$T/market-secret.txt" 1 guard
+pp_expect "public-pattern market price exempted" "$T/market.txt" 0 egress
+pp_expect "public pattern never exempts secrets" "$T/market-secret.txt" 1 egress
 
 end_suite
 
@@ -843,6 +869,7 @@ printf '%s\n' "- brief-gate runs on mandate (no syscall interception for brief t
 printf '%s\n' "- compositional/chunked exfiltration across calls: the gate judges each send in isolation; content split across sends is never reassembled"
 printf '%s\n' "- out-of-band egress: curl, webhooks, unshimmed CLIs, and any other non-shimmed path leave the machine without hitting the gate — only shimmed send paths are gated"
 printf '%s\n' "- A7 cron PATH check is static/syntactic: it proves the mandate is written in the prompt files, not that every scheduled worker honored it at runtime"
+printf '%s\n' "- public-pattern exemption is line-scoped in the review tier: a private figure sharing a line with a public-pattern match is also exempted from review (the BLOCK tier is computed before any exemption and is unaffected)"
 printf '%s\n' "- bare 9-digit SSN shapes are flagged (deliberately conservative) — false-positive risk documented as scenario E3"
 printf '%s\n' "- attachment/binary inspection: open gap (B4) — attachments are not unpacked or scanned"
 printf '%s\n' "- nested/part-level encodings inside MIME: the shim decodes the outer \`raw\` once; a secret inside a base64 MIME part (or any non-base64 encoding) is not decoded — known gap"

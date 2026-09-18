@@ -150,6 +150,22 @@ Verdict key:
   the real installation, with crashing (rc=3) and killed (rc=137)
   detectors.
 
+### A14. `gmail messages import` / `messages insert`
+- **Scenario:** Private content enters the mailbox through the Gmail
+  `import`/`insert` paths, which are not send paths and are not
+  intercepted by the shims.
+- **Conclusion:** OPEN GAP
+- **Details:** Only send/update paths are intercepted. Import/insert are
+  not gated. Restated as a residual in the audit (suite E) every run.
+
+### A15. Chat / calendar / settings-plane beyond Gmail settings
+- **Scenario:** The assistant acts through chat, calendar, or other
+  settings-plane surfaces beyond the Gmail settings mutations the shims
+  cover.
+- **Conclusion:** OPEN GAP
+- **Details:** No shim coverage outside the Gmail send/update/settings
+  paths. Restated as a residual in the audit (suite E) every run.
+
 ---
 
 ## B. Sharing and publishing
@@ -309,8 +325,12 @@ Verdict key:
   not pretend to know. The exemption for user-ruled-public literals lives
   in the installation's `.egress-allowlist` (review tier only; never for
   block-tier shapes), not in the gate's patterns — so the corpus case
-  `clean_price` expects rc=2 by design. Approval fatigue is a security
-  risk in its own right; this rule exists to prevent it.
+  `clean_price` expects rc=2 by design. When the user rules a whole literal
+  *class* public (e.g. a stock-price quote whose value changes daily, so
+  fixed strings cannot cover it), the class lives in the installation's
+  `.public-patterns` (one ERE per line), honored by `memory-guard` and
+  `memory-egress-check` in the review tier only. Approval fatigue is a
+  security risk in its own right; this rule exists to prevent it.
 
 ### E2. Stub-target validation mistaken for real protection validation
 
