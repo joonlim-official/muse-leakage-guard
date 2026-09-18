@@ -15,7 +15,7 @@ while [ $# -gt 0 ]; do
     *) shift;;
   esac
 done
-[ -z "$BRIEF" ] && { echo "brief-gate(stub): --brief-file is required" >&2; exit 2; }
+[ -z "$BRIEF" ] && { echo "brief-gate(stub): --brief-file is required" >&2; exit 1; }  # usage error is not a verdict: fail closed (never 2=approvable review)
 [ "${MOCHI_EGRESS_APPROVED:-}" = "1" ] && APPROVED=1
 "$STUB_DIR/bin/memory-egress-check" "$BRIEF" >/dev/null 2>&1; RC=$?
 [ "$RC" -eq 1 ] && { echo "brief-gate(stub): BLOCK — block-tier content in brief" >&2; exit 1; }

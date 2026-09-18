@@ -28,7 +28,7 @@ STUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$STUB_DIR/bin/patterns.sh"
 BLOCKSET="$STUB_DIR/bin/blockset.txt"
 
-die() { echo "memory-egress-check(stub): $*" >&2; exit 2; }
+die() { echo "memory-egress-check(stub): $*" >&2; exit 1; }  # operational failure is not a verdict: fail closed as block (never 0=allow, never 2=approvable review)
 [ -f "$BLOCKSET" ] || die "blockset.txt missing — run build/build-blockset.sh"
 
 INPUT="$(mktemp)"; trap 'rm -f "$INPUT"' EXIT

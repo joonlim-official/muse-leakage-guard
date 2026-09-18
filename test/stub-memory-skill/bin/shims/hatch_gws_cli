@@ -3,9 +3,13 @@
 # the real gmail/drive shim for harness self-consistency checks.
 # Interface version 1 (see ../../../references/gate-interface.md):
 #   gmail +send|+reply|+forward [--to T] [--subject S] [--body B]
-#       --draft/--dry-run pass through UNGATED (never leave the account)
+#       --draft/--dry-run as flags pass through UNGATED (never leave the
+#       account); as flag values (--subject --draft ...) they are gated content
 #   gmail users messages send --params '{"raw":"<base64url MIME>"}'
 #       -> the MIME is base64-decoded and gated before delegation
+#   gmail users messages send with '{"raw":"<base64url MIME>"}' on stdin
+#       -> same: the MIME is decoded and gated; the original stdin bytes are
+#          replayed to the delegate on allow (byte-identical)
 #   drive permissions create -> refused (rc=2) unless approved
 #   everything else passes straight through to the delegate
 # Delegates to $MOCHI_REAL_HATCH_GWS_CLI, else the next hatch_gws_cli on
@@ -17,14 +21,29 @@ SHIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE_DIR="$(cd "$SHIM_DIR/.." && pwd)"   # .../bin, where egress-gate lives
 
 REAL="${MOCHI_REAL_HATCH_GWS_CLI:-}"
+# Portable canonicalizer: realpath -m when available, else readlink -f, else identity.
+canon() {
+  if command -v realpath >/dev/null 2>&1; then realpath -m "$1" 2>/dev/null || printf '%s\n' "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then readlink -f "$1"
+  else printf '%s\n' "$1"; fi
+}
+SHIM_CANON="$(canon "$SHIM_DIR")"
 if [ -z "$REAL" ]; then
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    [ "$d" = "$SHIM_DIR" ] && continue
-    if [ -x "$d/hatch_gws_cli" ]; then REAL="$d/hatch_gws_cli"; break; fi
+    [ "$(canon "$d")" = "$SHIM_CANON" ] && continue   # skip our own dir (symlinked spellings included)
+    if [ -x "$d/hatch_gws_cli" ]; then
+      [ "$(canon "$d/hatch_gws_cli")" = "$SHIM_CANON/hatch_gws_cli" ] && continue  # never delegate to self
+      REAL="$d/hatch_gws_cli"; break
+    fi
   done <<< "${PATH//:/$'\n'}"
 fi
 [ -n "$REAL" ] || { echo "stub-shim: real hatch_gws_cli not found on PATH" >&2; exit 127; }
+# Fail closed: a delegate that resolves to this shim (env override or alias loop) would self-exec forever.
+if [ "$(canon "$REAL")" = "$SHIM_CANON/hatch_gws_cli" ]; then
+  echo "stub-shim: delegate resolves to the shim itself — refusing (fail closed)." >&2
+  exit 1
+fi
 
 pass_through() { exec "$REAL" "$@"; }
 
@@ -37,14 +56,21 @@ gate_file() { # <content-file> <context> <delegate args...> — gates, cleans up
   exit "$rc"
 }
 
+gate_stdin_replay() { # <content-file> <context> <stdin-file> <delegate args...> — gate decoded content; on allow, replay the ORIGINAL stdin bytes to the delegate
+  local f="$1" ctx="$2" sin="$3" rc=0
+  shift 3
+  "$GATE_DIR/egress-gate" --content-file "$f" --context "$ctx" || rc=$?
+  rm -f "$f"
+  if [ "$rc" -eq 0 ]; then "$REAL" "$@" < "$sin"; rc=$?; fi
+  rm -f "$sin"
+  exit "$rc"
+}
+
 # --- drive permissions create: granting OTHERS access is never a free-share zone
 if [ "${1:-}" = "drive" ]; then
-  hit_p=0; hit_c=0
-  for a in "$@"; do
-    [ "$a" = "permissions" ] && hit_p=1
-    [ "$a" = "create" ] && hit_c=1
-  done
-  if [ "$hit_p" -eq 1 ] && [ "$hit_c" -eq 1 ]; then
+  # Positional subcommand match: `drive permissions create ...`. Anywhere-token
+  # matching misfired on e.g. `drive files create --name permissions`.
+  if [ "${2:-}" = "permissions" ] && [ "${3:-}" = "create" ]; then
     if [ "${MOCHI_EGRESS_APPROVED:-0}" = "1" ]; then pass_through "$@"; fi
     echo "stub-shim: sharing a Drive file with others needs explicit approval — refused (stub)." >&2
     exit 2
@@ -56,28 +82,44 @@ if [ "${1:-}" = "gmail" ]; then
   sub="${2:-}"
   case "$sub" in
     +send|+reply|+forward)
-      # drafts and dry-runs never leave the account: not gated
-      for a in "$@"; do
-        case "$a" in --draft|--dry-run) pass_through "$@";; esac
-      done
-      subject=""; body=""; to=""; prev=""
+      # Parse --to/--subject/--body (space or = forms), tracking whether each
+      # token is a flag or a flag VALUE. --draft/--dry-run pass through UNGATED
+      # (drafts never leave the account) only when they appear as flags — never
+      # as the value of --subject/--body/--to (or an unknown option), where
+      # treating them as flags would skip the gate on real content.
+      subject=""; body=""; to=""; prev=""; prev_opt=""; draft=0
       for a in "$@"; do
         case "$a" in
-          --subject=*) subject="${a#--subject=}"; prev="";;
-          --body=*)    body="${a#--body=}";       prev="";;
-          --to=*)      to="${a#--to=}";           prev="";;
-          --subject) prev=subj;;
-          --body)    prev=body;;
-          --to)      prev=to;;
+          --subject=*) subject="${a#--subject=}"; prev=""; prev_opt="";;
+          --body=*)    body="${a#--body=}";       prev=""; prev_opt="";;
+          --to=*)      to="${a#--to=}";           prev=""; prev_opt="";;
+          --subject) prev=subj; prev_opt="";;
+          --body)    prev=body; prev_opt="";;
+          --to)      prev=to;   prev_opt="";;
+          --draft|--dry-run)
+            if [ -n "$prev" ] || [ -n "$prev_opt" ]; then
+              # flag value, not a flag: keep it in the gated content
+              case "$prev" in
+                subj) subject="$a";;
+                body) body="$a";;
+                to)   to="$a";;
+              esac
+              prev=""; prev_opt=""
+            else
+              draft=1
+            fi;;
           *) case "$prev" in
                subj) subject="$a";;
                body) body="$a";;
                to)   to="$a";;
-             esac; prev="";;
+             esac
+             case "$a" in --*) prev_opt=1;; *) prev_opt="";; esac
+             prev="";;
         esac
       done
+      [ "$draft" = "1" ] && pass_through "$@"
       tmp="$(mktemp)"
-      printf 'subject: %s\n\n%s\n' "$subject" "$body" > "$tmp"
+      printf 'to: %s\nsubject: %s\n\n%s\n' "$to" "$subject" "$body" > "$tmp"
       gate_file "$tmp" "gmail $sub to ${to:-unknown} (stub)" "$@"
       ;;
     users)
@@ -124,10 +166,42 @@ PYEOF
             echo "stub-shim: raw MIME payload is not decodable (malformed JSON or bad base64); refusing users messages send (fail closed)." >&2
             exit 1
           fi
+          gate_file "$tmp" "gmail users messages send (raw, stub)" "$@"
+        elif [ ! -t 0 ]; then
+          # Contract stdin form: {"raw":"<base64url MIME>"} piped on stdin.
+          # The MIME is decoded and gated; on allow the ORIGINAL stdin bytes
+          # are replayed to the delegate so the send is byte-identical.
+          stdin_tmp="$(mktemp)"
+          cat > "$stdin_tmp"
+          if [ ! -s "$stdin_tmp" ]; then
+            rm -f "$stdin_tmp"
+            printf '(no payload captured)' > "$tmp"
+            gate_file "$tmp" "gmail users messages send (raw, stub)" "$@"
+          fi
+          if ! command -v python3 >/dev/null 2>&1; then
+            rm -f "$tmp" "$stdin_tmp"
+            echo "stub-shim: python3 missing — cannot decode stdin raw MIME; refusing users messages send (fail closed)." >&2
+            exit 1
+          fi
+          if ! python3 - "$stdin_tmp" > "$tmp" 2>/dev/null <<'PYEOF'
+import sys, json, base64
+doc = json.loads(open(sys.argv[1], encoding="utf-8").read())
+raw = (doc.get("raw") or "")
+if not raw:
+    sys.exit(3)  # not the stdin form: refuse rather than guess
+pad = "=" * (-len(raw) % 4)
+sys.stdout.write(base64.urlsafe_b64decode(raw + pad).decode("utf-8", "replace"))
+PYEOF
+          then
+            rm -f "$tmp" "$stdin_tmp"
+            echo "stub-shim: stdin raw payload is not decodable base64url JSON {\"raw\": ...}; refusing users messages send (fail closed)." >&2
+            exit 1
+          fi
+          gate_stdin_replay "$tmp" "gmail users messages send (raw on stdin, stub)" "$stdin_tmp" "$@"
         else
           printf '(no payload captured)' > "$tmp"
+          gate_file "$tmp" "gmail users messages send (raw, stub)" "$@"
         fi
-        gate_file "$tmp" "gmail users messages send (raw, stub)" "$@"
       fi
       pass_through "$@"
       ;;

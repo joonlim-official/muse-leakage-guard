@@ -16,14 +16,29 @@ SHIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE_DIR="$(cd "$SHIM_DIR/.." && pwd)"   # .../bin, where egress-gate lives
 
 REAL="${MOCHI_REAL_HATCH_MESSENGER_CLI:-}"
+# Portable canonicalizer: realpath -m when available, else readlink -f, else identity.
+canon() {
+  if command -v realpath >/dev/null 2>&1; then realpath -m "$1" 2>/dev/null || printf '%s\n' "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then readlink -f "$1"
+  else printf '%s\n' "$1"; fi
+}
+SHIM_CANON="$(canon "$SHIM_DIR")"
 if [ -z "$REAL" ]; then
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    [ "$d" = "$SHIM_DIR" ] && continue
-    if [ -x "$d/hatch_messenger_cli" ]; then REAL="$d/hatch_messenger_cli"; break; fi
+    [ "$(canon "$d")" = "$SHIM_CANON" ] && continue   # skip our own dir (symlinked spellings included)
+    if [ -x "$d/hatch_messenger_cli" ]; then
+      [ "$(canon "$d/hatch_messenger_cli")" = "$SHIM_CANON/hatch_messenger_cli" ] && continue  # never delegate to self
+      REAL="$d/hatch_messenger_cli"; break
+    fi
   done <<< "${PATH//:/$'\n'}"
 fi
 [ -n "$REAL" ] || { echo "stub-shim: real hatch_messenger_cli not found on PATH" >&2; exit 127; }
+# Fail closed: a delegate that resolves to this shim (env override or alias loop) would self-exec forever.
+if [ "$(canon "$REAL")" = "$SHIM_CANON/hatch_messenger_cli" ]; then
+  echo "stub-shim: delegate resolves to the shim itself — refusing (fail closed)." >&2
+  exit 1
+fi
 
 case "${1:-}" in
   send|edit)

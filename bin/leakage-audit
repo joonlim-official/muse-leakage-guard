@@ -65,6 +65,19 @@ MEM_SKILL="${PERSONAL_MEMORY_SKILL:-$HOME/workspace/skills/personal-memory-syste
 # HTML report — and live-fire is refused against it (see below).
 STUBKIND=""
 if [ -f "$MEM_SKILL/.synthetic-stub" ]; then STUBKIND="synthetic-stub"; fi
+# Contract version this audit implements (references/gate-interface.md,
+# `contract_version`). A target declaring a different version is not
+# conformance-checked: the checks below are contract-shaped, so version
+# skew would be misattributed as broken gates.
+AUDIT_INTERFACE_VERSION="1"
+INTERFACE_OK=1
+# Portable canonicalizer for identity comparisons (symlinked/aliased
+# spellings must not defeat "is this the same file" assertions).
+canon_path() {
+  if command -v realpath >/dev/null 2>&1; then realpath -m "$1" 2>/dev/null || printf '%s\n' "$1"
+  elif readlink -f "$1" >/dev/null 2>&1; then readlink -f "$1"
+  else printf '%s\n' "$1"; fi
+}
 export PERSONAL_MEMORY_ROOT="${PERSONAL_MEMORY_ROOT:-$HOME}"
 AGENTS_FILE="${MOCHI_AGENTS_FILE:-$HOME/AGENTS.md}"
 CRON_DIRS="${MOCHI_CRON_PROMPT_DIRS:-}"
@@ -239,8 +252,23 @@ print_summary() {
 
 print_header
 
+T="$(mktemp -d)"
+
 # ---------------------------------------------------------------- A. install
 begin_suite "A" "Installation integrity"
+# Contract conformance is established before any contract-shaped probe runs:
+# the target must declare the interface version this audit implements.
+if [ "$STUBKIND" = "synthetic-stub" ]; then
+  declared_ver="$(grep -E '^interface_version=' "$MEM_SKILL/.synthetic-stub" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')"
+  if [ "$declared_ver" = "$AUDIT_INTERFACE_VERSION" ]; then
+    ok "target declares interface_version=$declared_ver (matches audit contract version $AUDIT_INTERFACE_VERSION)"
+  else
+    bad "interface version mismatch: target declares '${declared_ver:-unparsable}', audit implements $AUDIT_INTERFACE_VERSION" "" "contract checks are not meaningful across versions; update the harness or the target so both speak interface version $AUDIT_INTERFACE_VERSION, then re-run."
+    INTERFACE_OK=0
+  fi
+else
+  skip "interface_version check" "real target declares no interface_version (the contract names no declaration point for real skills yet — see references/gate-interface.md)"
+fi
 for f in bin/egress-gate bin/brief-gate bin/memory-egress-check; do
   if [ -x "$MEM_SKILL/$f" ]; then ok "$f present and executable"
   else bad "$f missing or not executable" "" "restore it from the muse-memory repo and chmod +x, then re-run this audit."; fi
@@ -254,13 +282,20 @@ for cli in hatch_gws_cli hatch_messenger_cli; do
   resolved="$(PATH="$SHIMDIR:$PATH" command -v "$cli")"
   if [ "$resolved" = "$SHIMDIR/$cli" ]; then ok "shim $cli shadows real binary on PATH"
   else bad "shim $cli does NOT shadow (resolves to $resolved)" "" "fix PATH ordering: export PATH=\"<memory-skill>/bin/shims:\$PATH\" before any other entry providing $cli."; fi
-  real_found=0
+  shim_canon="$(canon_path "$SHIMDIR/$cli")"
+  real_found=0; real_self=0
   while IFS= read -r d; do
     [ -n "$d" ] || continue
-    [ "$d" = "$SHIMDIR" ] && continue
-    if [ -x "$d/$cli" ]; then real_found=1; break; fi
+    [ "$(canon_path "$d")" = "$(canon_path "$SHIMDIR")" ] && continue
+    if [ -x "$d/$cli" ]; then
+      # Canonical identity: a symlinked/aliased spelling of the shim's own
+      # dir must not pass as "a distinct delegate" (it would self-exec).
+      if [ "$(canon_path "$d/$cli")" = "$shim_canon" ]; then real_self=1; else real_found=1; fi
+      break
+    fi
   done <<< "${PATH//:/$'\n'}"
-  if [ "$real_found" -eq 1 ]; then ok "real $cli discoverable behind shim"
+  if [ "$real_self" -eq 1 ]; then bad "delegate $cli resolves to the shim itself (self-exec loop)" "" "unset the MOCHI_REAL_* override or fix PATH so the shim delegates to a distinct binary; a self-delegate exec-loops."
+  elif [ "$real_found" -eq 1 ]; then ok "real $cli discoverable behind shim (distinct executable)"
   else bad "real $cli not found on PATH — shim has nothing to delegate to" "" "install the real CLI or extend PATH so the shim has a delegate; a shim with no delegate breaks every send."; fi
 done
 
@@ -276,7 +311,37 @@ corpus_cases="$(grep -vcE '^[[:space:]]*(#|$)' "$SKILL_DIR/bin/adversarial-corpu
 if [ "$corpus_cases" -ge 1 ]; then ok "adversarial corpus has $corpus_cases cases"
 else bad "adversarial corpus is empty — 0/0 would be a vacuous pass" "" "restore bin/adversarial-corpus.txt from the repo, then re-run this audit."; fi
 
+if [ "$STUBKIND" = "synthetic-stub" ]; then
+  # Operational failure must fail closed, never become approvable: a stub
+  # copy with no blockset.txt, gated with approval set, must still refuse.
+  broken_stub="$T/broken-stub"
+  cp -r "$MEM_SKILL" "$broken_stub"
+  rm -f "$broken_stub/bin/blockset.txt"
+  op_rc=0
+  MOCHI_EGRESS_APPROVED=1 "$broken_stub/bin/egress-gate" --content-file "$FIX/clean.txt" --context "leakage-audit:operational-failure" >/dev/null 2>&1 || op_rc=$?
+  rm -rf "$broken_stub"
+  if [ "$op_rc" -eq 1 ]; then ok "operational failure (missing blockset) fails closed under approval (rc=1)"
+  else bad "operational failure (missing blockset) with approval returned rc=$op_rc (want 1)" "" "a broken detector must never be approval-downgraded to allow; fix the gate's error paths, then re-run."; fi
+  # The stub's blockset must be current: a locally-stale blockset.txt fails
+  # loudly as verdict mismatches, but suite A is the natural home for
+  # "is the target self-consistent".
+  if "$MEM_SKILL/build/build-blockset.sh" --check >/dev/null 2>&1; then ok "stub blockset.txt is current (build-blockset.sh --check)"
+  else bad "stub blockset.txt is stale" "" "run: test/stub-memory-skill/build/build-blockset.sh, then re-run this audit."; fi
+else
+  skip "operational-failure approval isolation" "stub-only: exercises the synthetic stub's fail-closed error paths"
+  skip "blockset currency" "stub-only: the real installation has no build-blockset.sh"
+fi
+
 end_suite
+
+if [ "$INTERFACE_OK" != "1" ]; then
+  # Contract version skew: every check below is contract-shaped, so running
+  # them would misattribute version skew as broken gates. One clean verdict:
+  # the single suite-A FAIL above, ATTENTION, exit 1.
+  rm -rf "$T"
+  print_summary
+  exit 1
+fi
 
 # ------------------------------------------------- B. red team (fake sends)
 if [ "$AUDIT_MODE_SHORT" = "LIVE-FIRE" ]; then
@@ -284,7 +349,6 @@ if [ "$AUDIT_MODE_SHORT" = "LIVE-FIRE" ]; then
 else
   begin_suite "B" "Gate effectiveness (red team, synthetic payloads)"
 fi
-T="$(mktemp -d)"
 LIVE_FIRE="${MOCHI_LIVE_FIRE:-}"
 if [ "$LIVE_FIRE" = "1" ]; then
   # Live-fire: the shims delegate to the genuine CLIs (no MOCHI_REAL_* overrides),
@@ -410,6 +474,16 @@ send_expect "gmail non-send passes through" 0 1 -- $G gmail +triage --max 1
 
 RAW_MIME="$(python3 -c "import base64,sys; sys.stdout.write(base64.urlsafe_b64encode(open('$FIX/card.txt','rb').read()).decode())")"
 send_expect "raw messages.send with card in MIME blocked" 1 0 -- $G gmail users messages send --params "{\"raw\":\"$RAW_MIME\"}"
+# Contract stdin form: {"raw":"<base64url MIME>"} piped on stdin is gated
+# exactly like the --params form — the MIME, not the envelope, is judged.
+RAW_MIME_CLEAN="$(python3 -c "import base64,sys; sys.stdout.write(base64.urlsafe_b64encode(open('$FIX/clean.txt','rb').read()).decode())")"
+printf '{"raw":"%s"}' "$RAW_MIME" > "$T/stdin-raw-card.json"
+printf '{"raw":"%s"}' "$RAW_MIME_CLEAN" > "$T/stdin-raw-clean.json"
+send_expect "raw messages.send via stdin with card in MIME blocked" 1 0 -- bash -c 'hatch_gws_cli gmail users messages send < "$1"' _ "$T/stdin-raw-card.json"
+send_expect "raw messages.send via stdin with clean MIME passes" 0 1 -- bash -c 'hatch_gws_cli gmail users messages send < "$1"' _ "$T/stdin-raw-clean.json"
+# Draft token-confusion: --draft as the VALUE of --subject is gated content,
+# not a draft flag — it must not skip the gate on a secret body.
+send_expect "gmail +send --subject --draft with secret blocked (draft token-confusion)" 1 0 -- $G gmail +send --to a@example.com --subject --draft --body "$(cat "$FIX/secret.txt")"
 
 send_expect "messenger send clean passes" 0 1 -- $M send --cid '999' --text-stdin < "$FIX/clean.txt"
 send_expect "messenger send secret blocked" 1 0 -- $M send --cid '999' --text-stdin < "$FIX/secret2.txt"
@@ -417,6 +491,15 @@ send_expect "messenger threads passes through" 0 1 -- $M threads --limit 1 < /de
 
 send_expect "drive permissions create refused w/o approval" 2 0 -- $G drive permissions create --params '{}'
 send_expect "drive permissions create allowed with approval" 0 1 -- env MOCHI_EGRESS_APPROVED=1 $G drive permissions create --params '{}'
+# Positional subcommand match: the refusal must not fire on the same words
+# in other positions (fail-closed false positive). Stub-only: pins the
+# reference shim's precision; the real shim is conservatively broader
+# (fail-closed), which the contract permits.
+if [ "$STUBKIND" = "synthetic-stub" ]; then
+  send_expect "drive files create --name permissions not refused (positional match)" 0 1 -- $G drive files create --name permissions
+else
+  skip "drive files create --name permissions positional match" "stub-only: the real shim is conservatively broader (fail-closed), which the contract permits"
+fi
 send_expect "drive files list passes through (free zone)" 0 1 -- $G drive files list
 
 # stdin replay integrity: what the fake binary received must equal the fixture
@@ -428,10 +511,17 @@ else
 # --- live-fire: small representative subset, real sends to the owner's own accounts ---
 # Payloads are the same synthetic fixtures; only the transport is real.
 live_send_expect() { # <name> <want_rc> -- cmd...
+  # timeout -k, same as the simulated path: a hung real CLI fails closed
+  # (rc=124 -> finding) instead of wedging the audit mid-suite.
   local name="$1" want="$2"; shift 2
   [ "${1:-}" = "--" ] && shift
   local out rc
-  out="$("$@" 2>&1)"; rc=$?
+  out="$(timeout -k 10 30 "$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq 124 ]; then
+    bad "$name" "live send timed out after 30s (did not refuse or pass in time)" \
+      "a wedged real binary fails the audit instead of hanging it. Investigate the CLI before re-running with MOCHI_LIVE_FIRE=1."
+    return
+  fi
   if [ "$rc" -eq "$want" ]; then ok "$name (rc=$rc)"
   else bad "$name" "want rc=$want, got rc=$rc :: $(printf '%s' "$out" | head -3 | tr '\n' '|')" \
     "a live-fire send behaved unexpectedly. Inspect the shim and gate path for this subcommand before re-running with MOCHI_LIVE_FIRE=1."
@@ -630,6 +720,7 @@ printf '%s\n' "- out-of-band egress: curl, webhooks, unshimmed CLIs, and any oth
 printf '%s\n' "- A7 cron PATH check is static/syntactic: it proves the mandate is written in the prompt files, not that every scheduled worker honored it at runtime"
 printf '%s\n' "- bare 9-digit SSN shapes are flagged (deliberately conservative) — false-positive risk documented as scenario E3"
 printf '%s\n' "- attachment/binary inspection: open gap (B4) — attachments are not unpacked or scanned"
+printf '%s\n' "- nested/part-level encodings inside MIME: the shim decodes the outer \`raw\` once; a secret inside a base64 MIME part (or any non-base64 encoding) is not decoded — known gap"
 } | wdetail
 
 end_suite
