@@ -23,6 +23,7 @@ runs, because results against the wrong contract are meaningless.
 | Egress gate | `bin/egress-gate` |
 | Brief gate | `bin/brief-gate` |
 | Detector | `bin/memory-egress-check` |
+| Write-time guard | `bin/memory-guard` |
 | Gmail/Drive shim | `bin/shims/hatch_gws_cli` |
 | Messenger shim | `bin/shims/hatch_messenger_cli` |
 
@@ -72,6 +73,26 @@ bin/memory-egress-check [file ...]
 ```
 
 Scans files, or stdin when no files are given. Same 0/1/2 contract.
+
+## Write-time interface (memory-guard)
+
+```
+bin/memory-guard [path ...]
+bin/memory-guard -h|--help
+```
+
+Pre-write / audit scan for memory content. Same 0/1/2 contract as the
+detector: 0 = clean, 1 = secret block-tier (hard block — the write is
+refused until fixed), 2 = figure- or personal-data-shaped content flagged
+for human review. Env: `MEMORY_FIGURE_ALLOWLIST` (default
+`<memory-root>/memory/.figure-allowlist`) holds installation-specific
+fixed-string patterns, one per line; figure- and personal-data matches
+containing any pattern are excluded from the review flag. **The allowlist
+never exempts secrets** — a secret-shaped match is block-tier regardless
+of the allowlist. Operational failures (no paths given where the
+implementation requires them, unreadable inputs) fail closed: nonzero,
+never 0. This section is additive: it extends the contract without
+changing any existing semantics, so `contract_version` stays 1.
 
 ## Shim interception contract
 
@@ -124,4 +145,6 @@ export PATH="<skill>/bin/shims:$PATH"
   quality. Only a run against the real installation speaks to protection.
 - The stub detector (`test/stub-memory-skill/bin/memory-egress-check`)
   classifies by lookup in a declared set of synthetic tokens; it is a test
-  double and must never be deployed as a protection layer.
+  double and must never be deployed as a protection layer. The same holds
+  for the stub write-time guard (`test/stub-memory-skill/bin/memory-guard`),
+  which mirrors the write-time interface above with lookup-based verdicts.

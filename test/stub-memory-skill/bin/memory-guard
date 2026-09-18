@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# memory-guard (SYNTHETIC STUB) — test-double write-time scanner for the
+# leakage-guard harness self-consistency checks. NOT a protection layer.
+#
+# Interface: same CLI contract as the real memory-guard
+# (references/gate-interface.md, "Write-time interface", contract version 1):
+#   bin/memory-guard [path ...]      — scan files
+#   bin/memory-guard -h|--help       — usage
+# Exit 0 = clean, 1 = block-tier (declared synthetic secret token present),
+#        2 = review-tier (figure- or personal-data-shaped content present).
+#
+# How it decides (same five-rule fidelity contract as the stub's
+# memory-egress-check):
+#  1. Same CLI interface as the real binary (explicit paths; -h/--help).
+#  2. Verdicts by lookup in a declared synthetic set, never by detection:
+#     secret candidates (bin/patterns.sh STUB_SECRET_CAND) whose sha256 is in
+#     bin/blockset.txt are block-tier (exit 1).
+#  3. Anything else secret/figure/phone-shaped that was NOT explicitly
+#     declared fails closed to review-tier (exit 2) — this double must never
+#     auto-allow a shape it was not told is synthetic.
+#  4. Operational failure (missing blockset) fails closed: exit 1, never 0.
+#  5. Labeled as a test double everywhere; never deploy as protection.
+#
+# Deliberate difference from the real tool: the real memory-guard blocks ANY
+# SECRET_RE-shaped token (pattern-based); this double blocks only DECLARED
+# tokens (lookup-based) and fail-closes the rest to review-tier. Do not read
+# the double's rc=2-on-unknown as the real tool's rc=1-on-unknown.
+#
+# Env:
+#   MEMORY_FIGURE_ALLOWLIST   file of fixed-string patterns, one per line;
+#     figure- and phone-shaped matches containing any pattern are excluded
+#     (mirrors the real tool). Secrets are NEVER exempted by the allowlist.
+# NEVER point this stub at real private data: it is not a detector.
+set -u
+STUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$STUB_DIR/bin/patterns.sh"
+BLOCKSET="$STUB_DIR/bin/blockset.txt"
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  echo "usage: memory-guard [path ...]"
+  echo "  Test-double write-time scan. exit 0 = clean, 1 = declared synthetic"
+  echo "  secret token present, 2 = figure/personal-data-shaped content."
+  exit 0
+fi
+
+die() { echo "memory-guard(stub): $*" >&2; exit 1; }  # operational failure is not a verdict: fail closed as block (never 0=allow)
+[ -f "$BLOCKSET" ] || die "blockset.txt missing — run build/build-blockset.sh"
+[ "$#" -gt 0 ] || die "no paths given (the stub scans explicit paths only — it never walks a default tree)"
+
+INPUT="$(mktemp)"; trap 'rm -f "$INPUT"' EXIT
+for f in "$@"; do [ -f "$f" ] || die "not a file: $f"; { cat "$f"; printf '\n'; } >> "$INPUT"; done
+
+# Allowlist: fixed-string patterns, one per line; applies to figure- and
+# phone-shaped matches only — never to secrets (a secret is never exempt).
+ALLOWLIST="${MEMORY_FIGURE_ALLOWLIST:-/dev/null}"
+allow_hit() { # <line> — 0 if the line matches an allowlist pattern
+  [ -f "$ALLOWLIST" ] || return 1
+  local pat line="$1"
+  while IFS= read -r pat; do
+    case "$pat" in ''|'#'*) continue;; esac
+    case "$line" in *"$pat"*) return 0;; esac
+  done < "$ALLOWLIST"
+  return 1
+}
+
+worst=0   # 0 clean < 2 review < 1 block (block wins over review)
+secret_hits=0
+while IFS= read -r cand; do
+  [ -n "$cand" ] || continue
+  h="$(printf '%s' "$cand" | sha256sum | cut -d' ' -f1)"
+  if grep -qx "$h" "$BLOCKSET" 2>/dev/null; then
+    worst=1; secret_hits=$((secret_hits+1))
+  else
+    # Secret-shaped but not in the declared synthetic set: fail closed.
+    [ "$worst" -ne 1 ] && worst=2
+  fi
+done < <(grep -oE "$STUB_SECRET_CAND" "$INPUT" || true)
+
+# Figure- and phone-shaped candidates: review-tier unless allowlisted.
+if grep -qE "$STUB_FIGURE_CAND" "$INPUT" 2>/dev/null; then
+  if [ "$worst" -ne 1 ]; then
+    fig_exempted=1
+    while IFS= read -r line; do
+      allow_hit "$line" || fig_exempted=0
+    done < <(grep -E "$STUB_FIGURE_CAND" "$INPUT" || true)
+    [ "$fig_exempted" -eq 1 ] || worst=2
+  fi
+fi
+if grep -qE "$STUB_PHONE_CAND" "$INPUT" 2>/dev/null; then
+  if [ "$worst" -ne 1 ]; then
+    phone_exempted=1
+    while IFS= read -r line; do
+      allow_hit "$line" || phone_exempted=0
+    done < <(grep -E "$STUB_PHONE_CAND" "$INPUT" || true)
+    [ "$phone_exempted" -eq 1 ] || worst=2
+  fi
+fi
+
+case "$worst" in
+  1) echo "memory-guard(stub): BLOCK — $secret_hits declared synthetic block-tier token(s) present (test double verdict, not a real detection)";;
+  2) echo "memory-guard(stub): REVIEW — undeclared secret/figure/phone-shaped content; fail closed (test double verdict, not a real detection)";;
+  0) echo "memory-guard(stub): CLEAN — no candidates (test double verdict, not a real detection)";;
+esac
+exit "$worst"

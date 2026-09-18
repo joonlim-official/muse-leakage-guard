@@ -359,8 +359,17 @@ def tested_blurb(s):
         return (f"{total_n} red-team checks ({transport}). Block-tier payloads must be refused with rc=1 and the real binary uninvoked; "
                 f"review-tier payloads refused without approval (rc=2); clean payloads pass (rc=0).")
     if letter == "C":
-        return (f"{total_n} static checks on the protection wiring (agent-manual mandates, briefing policy, cron shim-PATH wiring, "
-                f"scenario coverage map, public-repo denylist scan, fixture purity) — {p} passed"
+        # Probe vs static counts are derived from the run itself: probe
+        # checks carry the stable "memory-guard: " name prefix (see
+        # bin/leakage-audit guard_expect). Never hardcoded.
+        probe_n = sum(1 for c in s["checks"] if c["text"].startswith("memory-guard: "))
+        static_n = total_n - probe_n
+        blurb = (f"{total_n} checks on the protection wiring ({static_n} static: agent-manual mandates, briefing policy, "
+                 f"cron shim-PATH wiring, scenario coverage map, public-repo denylist scan, fixture purity")
+        if probe_n:
+            blurb += (f"; {probe_n} write-time guard probes: synthetic secret/figure/phone content scanned by "
+                      f"bin/memory-guard, allowlist exemption exercised")
+        return (blurb + f" — {p} passed"
                 + (f", {f} failed" if f else "") + (f", {sk} skipped" if sk else "") + ".")
     if letter == "D":
         if any(c["st"] == "\u2013" for c in s["checks"]):

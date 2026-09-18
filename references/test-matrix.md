@@ -120,8 +120,8 @@ without a mapped check is a finding, not an oversight.
 | C3 transcript inheritance | POLICY-ONLY | C: brief-gate mandate in agent manual; E: restated as residual |
 | C4 browser task outside shim reach | POLICY-ONLY | E: restated as residual |
 | C5 prompt injection toward exfiltration | PROTECTED (in depth) | B: shape detection over direct synthetic payloads on the shimmed send paths (no injected-shaped payload exists in fixtures/corpus); C: brief-gate + shim mandates. Boundary: shimmed paths only — absolute-path bypass is A8's residual |
-| D1 secrets written to memory | PROTECTED | real-installation-only, mandate-level: `memory-guard` pre-write scan; `memory-audit` opt-in. Vacuous against stub targets (the stub ships neither binary; CI pins `memory-audit` as a skip) — not harness-verified where CI runs |
-| D2 figures written to memory | APPROVAL-GATED | real-installation-only, mandate-level: `memory-guard` flags figures for review. Vacuous against stub targets — not harness-verified where CI runs |
+| D1 secrets written to memory | PROTECTED | C: suite-A asserts `bin/memory-guard` present/executable/parses; suite-C write-time probes fire synthetic fixtures at it — secret → rc=1, clean → rc=0, allowlisted secret → still rc=1 (allowlist never exempts secrets). Stub target: `test/stub-memory-skill/bin/memory-guard` test double (lookup-based, fail-closed) so CI exercises the probes |
+| D2 figures written to memory | APPROVAL-GATED | C: write-time probes — figure/phone → rc=2, allowlisted figure → rc=0 (exemption path exercised). `memory-audit` remains opt-in |
 | D3 memory read by unauthorized party | PROTECTED (platform) | platform boundary — no in-repo mechanical test possible; documented here |
 | E1 public info treated as private | anti-over-gating | B: clean → exit 0; adversarial-run false-positive traps; public-number allowlist |
 | E2 stub-target validation mistaken for real protection | PROTECTED (labeling + refusal) | A: `target-kind: SYNTHETIC STUB` + STUBKIND sentinel; report banner/title/footer; live-fire refused vs stub; CI pins skip set |

@@ -265,7 +265,9 @@ Verdict key:
 - **Details:** `bin/memory-guard` scans new content before writing;
   secrets are a hard block — the write is refused until fixed. Credentials
   live in the Secure Vault only, never in memory, never in chat logs that
-  get persisted.
+  get persisted. Verified by red-team (suite C write-time probes): a
+  synthetic secret is blocked (rc=1), and a secret stays blocked even when
+  named in the figure allowlist — the allowlist never exempts secrets.
 
 ### D2. Financial figures written into memory
 - **Scenario:** Balances, amounts, or rates end up scattered across memory
@@ -275,7 +277,10 @@ Verdict key:
   blocking; the standing rule keeps figures in chat, the finance
   dashboard, and one dated headline-facts index — never anywhere else.
   Public figures (market prices) are exempt by classification, not by
-  permission.
+  permission. Verified by red-team (suite C write-time probes): synthetic
+  figures and phone-shaped content are flagged (rc=2), clean text passes
+  (rc=0), and a figure named in the installation's `.figure-allowlist` is
+  exempted — the exemption path is exercised, not just documented.
 
 ### D3. Memory files read by an unauthorized party
 - **Scenario:** Someone other than the user reads the memory tree.

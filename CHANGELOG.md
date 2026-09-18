@@ -3,6 +3,27 @@
 Brief per-iteration notes. Each iteration: all 10 personas review in
 parallel → synthesis → one focused diff → full validation → one commit.
 
+## Iteration 10 — Verify the write-time guard (memory-guard probes)
+
+The write-time control behind the D1/D2 catalog claims ("secrets blocked
+at write time", "figures flagged at write time") was never exercised by
+the audit — the test matrix admitted it was "not harness-verified where
+CI runs." Now it is: six behavioral probes in suite C fire synthetic
+fixtures at `bin/memory-guard` (secret → rc=1, figure/phone → rc=2, clean
+→ rc=0, allowlisted figure → rc=0, allowlisted secret → still rc=1), suite
+A asserts the binary is present and parse-clean, and the synthetic stub
+ships a lookup-based `memory-guard` test double (same five-rule fidelity
+contract as the egress-check double; labeled non-protection everywhere) so
+CI exercises the probes too. The write-time interface is now a named,
+additive section of `references/gate-interface.md` (contract version stays
+1); the report's suite-C "Checked:" blurb derives its static/probe counts
+from the run. Probes always pass explicit fixture paths and a controlled
+`/tmp` allowlist — never the default memory tree or the real allowlist —
+and discard stdout, comparing only exit codes.
+Validation: stub audit 94/0/1 CLEAN, real audit 90/0/5 CLEAN; adversarial
+36/36 both targets; CI pin moved 83 → 91 in the same commit; report
+regenerated and screenshot-QA'd (desktop + mobile).
+
 ## Iteration 9 — Fail-closed gates + red-team coverage of critical send paths
 
 Every way a send could dodge the gate is now closed, tested, and pinned:

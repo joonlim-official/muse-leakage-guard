@@ -35,10 +35,15 @@ alone prints the same results as plain text.
    test SSN/card shapes, figures, phones, clean text) are fired at every
    gate and every send path; each must return exactly the expected
    verdict, and blocked sends must never reach the real binary.
-3. **Coverage gaps (static checks)** — every known exfiltration path is
-   mapped in `references/attack-surface.md`; the audit verifies each
-   path's stated control is actually in place (cron PATH wiring, briefing
-   mandates, memory audit green).
+3. **Coverage gaps (static checks + write-time guard probes)** — every
+   known exfiltration path is mapped in `references/attack-surface.md`;
+   the audit verifies each path's stated control is actually in place
+   (cron PATH wiring, briefing mandates, memory audit green). The
+   write-time control (`bin/memory-guard`, behind the D1/D2 catalog
+   claims) is probed behaviorally: synthetic secrets must block (rc=1),
+   figures and phone-shaped content must flag for review (rc=2), clean
+   text passes (rc=0), and the figure-allowlist exemption is exercised —
+   including the rule that the allowlist never exempts secrets.
 4. **Audit-log review** — recent gate decisions are summarized; approval
    overrides and blocked attempts are surfaced for human review.
 5. **Known residuals** — paths that cannot be technically gated are

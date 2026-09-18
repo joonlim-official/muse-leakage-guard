@@ -282,11 +282,11 @@ if [ "$STUBKIND" = "synthetic-stub" ]; then
 else
   skip "interface_version check" "real target declares no interface_version (the contract names no declaration point for real skills yet — see references/gate-interface.md)"
 fi
-for f in bin/egress-gate bin/brief-gate bin/memory-egress-check; do
+for f in bin/egress-gate bin/brief-gate bin/memory-egress-check bin/memory-guard; do
   if [ -x "$MEM_SKILL/$f" ]; then ok "$f present and executable"
   else bad "$f missing or not executable" "" "restore it from the muse-memory repo and chmod +x, then re-run this audit."; fi
 done
-for f in bin/egress-gate bin/brief-gate bin/memory-egress-check bin/shims/hatch_gws_cli bin/shims/hatch_messenger_cli; do
+for f in bin/egress-gate bin/brief-gate bin/memory-egress-check bin/memory-guard bin/shims/hatch_gws_cli bin/shims/hatch_messenger_cli; do
   if bash -n "$MEM_SKILL/$f" 2>/dev/null; then ok "$f parses"
   else bad "$f has syntax errors" "" "run: bash -n $MEM_SKILL/$f to locate the error, fix it, then re-run this audit."; fi
 done
@@ -681,8 +681,12 @@ fi
 
 end_suite
 
-# ------------------------------------------------------- C. static coverage
-begin_suite "C" "Attack-surface coverage (static checks)"
+# ------------------------------------------------------- C. coverage
+# Attack-surface coverage: every known exfiltration path is mapped in
+# references/attack-surface.md, and each path's stated control is verified
+# to actually be in place — statically where the control is a mandate, and
+# behaviorally where the control is a binary (the write-time guard probes).
+begin_suite "C" "Attack-surface coverage (controls verified in place)"
 if [ -f "$AGENTS_FILE" ]; then
   grep -q "bin/shims" "$AGENTS_FILE" && ok "agent manual mandates shim PATH" || bad "agent manual missing shim mandate" "" "add the shim-PATH export mandate to the agent manual (see the memory skill's references/data-protection.md), then re-run this audit."
   grep -q "brief-gate" "$AGENTS_FILE" && ok "agent manual mandates brief gating" || bad "agent manual missing brief-gate mandate" "" "add the brief-gate mandate to the agent manual, then re-run this audit."
@@ -762,6 +766,45 @@ if [ -f "$SYNTH" ]; then
   if [ -n "$undeclared" ]; then bad "undeclared secret-shaped fixture values" "$undeclared" "declare each value as synthetic in bin/fixtures/SYNTHETIC.txt (after review), or remove it, then re-run this audit."
   else ok "all secret-shaped fixture values are declared synthetic"; fi
 else bad "bin/fixtures/SYNTHETIC.txt missing" "" "restore it from the repo, then re-run this audit."; fi
+
+# Write-time guard probes (D1/D2 in references/attack-surface.md): the
+# catalog claims bin/memory-guard blocks secrets and flags figures/PII at
+# write time. These probes verify the claim behaviorally instead of
+# trusting the catalog. Privacy discipline: probes always pass explicit
+# fixture paths and a controlled allowlist — never the default memory
+# tree, never the installation's real allowlist — and stdout is discarded
+# so only the exit code is compared. (Do not "simplify" these to scan the
+# default tree: that would print real memory content into audit logs.)
+guard_expect() { # <name> <fixture> <want_rc> [allowlist_file]
+  local name="$1" fix="$2" want="$3" rc
+  if [ -n "${4:-}" ]; then
+    rc="$(timeout -k 10 30 env "MEMORY_FIGURE_ALLOWLIST=$4" "$MEM_SKILL/bin/memory-guard" "$FIX/$fix" >/dev/null 2>&1; echo $?)"
+  else
+    rc="$(timeout -k 10 30 env MEMORY_FIGURE_ALLOWLIST=/dev/null "$MEM_SKILL/bin/memory-guard" "$FIX/$fix" >/dev/null 2>&1; echo $?)"
+  fi
+  if [ "$rc" -eq 124 ]; then
+    bad "memory-guard: $name" "memory-guard timed out after 30s (did not answer in time)" \
+      "investigate why memory-guard hung on fixture $fix; do not trust write-time verdicts from this installation until it answers."
+    return
+  fi
+  if [ "$rc" -eq "$want" ]; then ok "memory-guard: $name (rc=$rc)"
+  else
+    case "$want" in
+      1) sug="block-tier content was not blocked at write time. Check the secret patterns in the target's bin/memory-guard, then re-run this audit.";;
+      2) sug="review-tier content was not flagged at write time. Check the figure/PII patterns in the target's bin/memory-guard, then re-run this audit.";;
+      *) sug="benign content was flagged at write time (rc=$rc). Narrow the over-matching pattern in the target's bin/memory-guard, then re-run this audit.";;
+    esac
+    bad "memory-guard: $name" "want rc=$want, got rc=$rc" "$sug"
+  fi
+}
+guard_expect "secret blocked" secret.txt 1
+guard_expect "figure flagged for review" figure.txt 2
+guard_expect "phone flagged for review" phone.txt 2
+guard_expect "clean passes" clean.txt 0
+printf '%s\n' "$(cat "$FIX/figure.txt")" > "$T/allow-figure.txt"
+guard_expect "allowlisted figure exempted" figure.txt 0 "$T/allow-figure.txt"
+printf '%s\n' "$(cat "$FIX/secret.txt")" > "$T/allow-secret.txt"
+guard_expect "allowlisted secret still blocked (allowlist never exempts secrets)" secret.txt 1 "$T/allow-secret.txt"
 
 end_suite
 

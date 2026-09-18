@@ -247,6 +247,38 @@ adversarial 36/36 both targets (block 19/19, review 9/9, clean 8/8);
 report regenerated and screenshot-QA'd (desktop + mobile); real gate
 log verified unpolluted by validation runs.
 
+## Iteration 10 — Verify the write-time guard (memory-guard probes)
+Theme: the write-time control behind the D1/D2 catalog claims is now
+verified, not just catalogued — the least-examined, most-exercised
+control (the daily refresh writes memory every morning) gets the same
+fixture-conformance treatment iteration 9 gave the send plane.
+- Audit: suite A asserts `bin/memory-guard` present/executable/parses;
+  suite C (renamed "Attack-surface coverage (controls verified in
+  place)") gains six behavioral probes via a `guard_expect` helper
+  (`timeout -k`, rc comparison): synthetic secret → rc=1, figure → rc=2,
+  phone → rc=2, clean → rc=0, allowlisted figure → rc=0, allowlisted secret
+  → still rc=1. Probes pass explicit fixture paths and a controlled
+  `/tmp` allowlist only — never the default tree or the real allowlist —
+  and compare exit codes alone.
+- Stub: new `bin/memory-guard` test double under the existing five-rule
+  fidelity contract (same CLI, lookup-based verdicts, undeclared
+  secret-shaped → rc=2 fail-closed, missing blockset → rc=1, labeled
+  non-protection in header + stub README); deliberately differs from the
+  real tool (pattern-based block) and says so.
+- Contract: `references/gate-interface.md` gains an additive "Write-time
+  interface (memory-guard)" section; `contract_version` stays 1.
+- Report: suite-C `tested_blurb` derives static/probe counts from the
+  run's check-name prefixes (never hardcoded).
+- CI: composition pin `@@@ TOTAL 83 0 4` → `@@@ TOTAL 91 0 4` in the same
+  commit; syntax-check list gains the new double.
+- Docs: attack-surface D1/D2 and test-matrix D1/D2 now say "verified by
+  red-team (suite C write-time probes)"; SKILL.md item 3 extended.
+Validation: stub audit 94/0/1 CLEAN, real audit 90/0/5 CLEAN;
+adversarial 36/36 both targets (block 19/19, review 9/9, clean 8/8);
+CI-equivalent run confirms `@@@ TOTAL 91 0 4` with the 4 pinned skips;
+`bash -n` on all touched scripts; report regenerated and screenshot-QA'd
+(desktop + mobile); card-C blurb verified against the run.
+
 ## Backlog (iterations 6–10)
 - ~~Measurement rigor: confusion-matrix framing, KNOWN-GAP markers~~ (done, iteration 5)
 - Suite-B fake-binary fidelity and timeout coverage
@@ -263,3 +295,20 @@ log verified unpolluted by validation runs.
 - Near-miss negative traps (corpus stays pinned at 36 unless revised)
 - CI status/total assertions and deterministic artifacts
 - Final integration verification (diff through memory-egress-check, push, fresh report)
+
+## Post-loop backlog (explicitly deferred from iteration 10 — not dropped)
+- ~~memory-guard write-time probe + allowlist exercise~~ (done, iteration 10)
+- Live-fire guard CI assertions: exit-2 on stub target, exit-2 when
+  `MOCHI_LIVE_FIRE` comes only from `local.env`, non-TTY refusal — all
+  CI-safe (no sends possible); test shapes recorded in the iter-10 SRE
+  review (`hidden_files/iter10-reviews/07-sre.md`).
+- Adversarial evasion depth: case/whitespace/punctuation variants,
+  multi-tier payloads, near-miss negatives (corpus + blockset + CI pin in
+  lockstep; corpus stays pinned at 36 unless revised).
+- Machine-readable residual source of truth (suite E, attack-surface.md,
+  and README enumerations asserted to agree).
+- `.egress-allowlist` block-tier immunity probe (send plane).
+- B2/B3 git-history scan (needs a redaction design before CI logs can
+  carry it).
+- SECURITY.md, issue/PR templates, CONTRIBUTING canonical quickstart,
+  exit-code reference, TOC, fixture-recipient ground rules.

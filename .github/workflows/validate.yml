@@ -131,6 +131,7 @@ jobs:
                    test/stub-memory-skill/bin/egress-gate \
                    test/stub-memory-skill/bin/brief-gate \
                    test/stub-memory-skill/bin/memory-egress-check \
+                   test/stub-memory-skill/bin/memory-guard \
                    test/stub-memory-skill/bin/patterns.sh \
                    test/stub-memory-skill/bin/shims/hatch_gws_cli \
                    test/stub-memory-skill/bin/shims/hatch_messenger_cli \
@@ -212,16 +213,20 @@ jobs:
           # Pinned as of the iteration that added fail-closed detector probes
           # plus red-team coverage of reply-all / -- / drafts send / settings
           # mutations / messenger edit (stub target: 87 checks total, 4 of
-          # which are the pinned CI skips; adversarial corpus: 36 cases).
+          # which are the pinned CI skips; adversarial corpus: 36 cases),
+          # then the iteration that added write-time guard probes
+          # (bin/memory-guard presence/parses in suite A, six memory-guard
+          # probes in suite C — stub target: 95 checks total, still 4 pinned
+          # CI skips; adversarial corpus unchanged at 36 cases).
           fail=0
           if [ ! -f "${{ runner.temp }}/audit.log" ]; then
             echo "validate: FAIL — audit.log missing (audit did not run)" >&2; fail=1
           else
             t="$(grep -a '^@@@ TOTAL ' "${{ runner.temp }}/audit.log" | tail -n 1 || true)"
-            if [ "$t" = "@@@ TOTAL 83 0 4" ]; then
-              echo "validate: audit composition pinned (83 passed · 0 failed · 4 skipped)"
+            if [ "$t" = "@@@ TOTAL 91 0 4" ]; then
+              echo "validate: audit composition pinned (91 passed · 0 failed · 4 skipped)"
             else
-              echo "validate: FAIL — expected '@@@ TOTAL 83 0 4', got '$t'" >&2; fail=1
+              echo "validate: FAIL — expected '@@@ TOTAL 91 0 4', got '$t'" >&2; fail=1
             fi
           fi
           if [ ! -f "${{ runner.temp }}/adversarial.log" ]; then
@@ -335,7 +340,7 @@ jobs:
           fi
 
           comp_detail="composition figures unavailable — see step log"
-          comp_detail="$( [ -f "$RC_DIR/composition-assert" ] && [ "$(cat "$RC_DIR/composition-assert")" = "0" ] && echo "audit 83/0/4 + adversarial 36/36 pinned" || echo "$comp_detail" )"
+          comp_detail="$( [ -f "$RC_DIR/composition-assert" ] && [ "$(cat "$RC_DIR/composition-assert")" = "0" ] && echo "audit 91/0/4 + adversarial 36/36 pinned" || echo "$comp_detail" )"
 
           rep_detail="report not generated"
           if [ "${{ steps.report.outputs.report_exists }}" = "true" ]; then
