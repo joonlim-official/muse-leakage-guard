@@ -46,3 +46,9 @@ date_iso|0|Meeting on 2026-09-17 at 3pm
 order_num|0|Confirmation 5550001234 for your stay
 zip_code|0|Ship to Beverly Hills, CA 90210
 version|0|Upgraded to v1.2.3 last night
+# conf_8digit / ticket_alnum are false-positive traps from real usage
+# (2026-09-18): 8-digit hotel confirmation numbers sit just below the
+# conservative bare-9-digit SSN rule, and alphanumeric ticket references
+# must not trip any secret shape. Both expect 0 by design.
+conf_8digit|0|Hotel confirmation 71284590, checkout 11 AM
+ticket_alnum|0|Promo inquiry reference ticket Q70234881
