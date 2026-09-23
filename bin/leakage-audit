@@ -805,6 +805,34 @@ printf '%s\n' "$(cat "$FIX/figure.txt")" > "$T/allow-figure.txt"
 guard_expect "allowlisted figure exempted" figure.txt 0 "$T/allow-figure.txt"
 printf '%s\n' "$(cat "$FIX/secret.txt")" > "$T/allow-secret.txt"
 guard_expect "allowlisted secret still blocked (allowlist never exempts secrets)" secret.txt 1 "$T/allow-secret.txt"
+# No-args stdin modes (2026-09-22 regression): a no-args invocation whose
+# stdin is an idle pipe (cron, $(...)) must not hang on `cat` forever, and
+# memory-guard must not false-clean by scanning an empty temp file.
+# PERSONAL_MEMORY_ROOT points at a scratch tree so the fallback tree scan
+# never touches the real memory; the planted figure is a declared
+# synthetic corpus value, never real data.
+mkdir -p "$T/emptyroot/memory/trace"
+# Planted figure is a declared synthetic corpus value (fig_dollar), never
+# real data: any nonzero rc proves the fallback scanned the tree, while
+# the old false-clean bug would return rc=0 on an empty temp file.
+printf 'note budget $12,500 per month\n' > "$T/emptyroot/memory/trace/t.md"
+stdin_probe() { # <name> <binary> <want_rc>
+  local name="$1" bin="$2" want="$3" rc sleeper
+  mkfifo "$T/idlepipe" 2>/dev/null || true
+  sleep 30 > "$T/idlepipe" 2>/dev/null & sleeper=$!
+  rc="$(timeout -k 5 20 env PERSONAL_MEMORY_ROOT="$T/emptyroot" "$bin" < "$T/idlepipe" >/dev/null 2>&1; echo $?)"
+  kill "$sleeper" 2>/dev/null; wait "$sleeper" 2>/dev/null; rm -f "$T/idlepipe"
+  if [ "$rc" -eq 124 ]; then
+    bad "$name" "hung on an idle pipe (killed by timeout)" \
+      "the no-args stdin path must probe for data with a timeout instead of blocking on cat; see the 2026-09-22 memory-guard fix."
+  elif [ "$rc" -eq "$want" ]; then ok "$name (rc=$rc)"
+  else bad "$name" "want rc=$want, got rc=$rc" "check the no-args stdin handling in $bin."
+  fi
+}
+stdin_probe "memory-guard: idle-pipe stdin falls back to the tree scan (planted figure found)" "$MEM_SKILL/bin/memory-guard" 2
+rm -f "$T/emptyroot/memory/trace/t.md"
+stdin_probe "memory-guard: idle-pipe stdin on a clean tree, no hang" "$MEM_SKILL/bin/memory-guard" 0
+stdin_probe "memory-egress-check: idle-pipe stdin is clean, no hang" "$MEM_SKILL/bin/memory-egress-check" 0
 # Public-pattern class exemptions (E1): the auditor can rule a literal CLASS
 # public (e.g. market-price quotes whose values change daily, so fixed
 # strings cannot cover them). Controlled pattern file and temp fixtures —
