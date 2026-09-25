@@ -211,6 +211,18 @@ jobs:
           echo "$fail" > "${{ runner.temp }}/rc/skip-assert"
           exit 0
 
+      - name: Run the adversarial suite against the synthetic stub
+        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
+        timeout-minutes: 5
+        run: |
+          set -uo pipefail
+          mkdir -p "${{ runner.temp }}/rc"
+          # PIPESTATUS[0] preserves the runner's exit code through tee; a
+          # bare pipe would let a failing suite report a green step.
+          bin/adversarial-run 2>&1 | tee "${{ runner.temp }}/adversarial.log"
+          echo "${PIPESTATUS[0]}" > "${{ runner.temp }}/rc/adversarial"
+          exit 0
+
       - name: Assert pinned validation composition (no vacuous green)
         if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
         timeout-minutes: 2
@@ -262,18 +274,6 @@ jobs:
             fi
           fi
           echo "$fail" > "${{ runner.temp }}/rc/composition-assert"
-          exit 0
-
-      - name: Run the adversarial suite against the synthetic stub
-        if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
-        timeout-minutes: 5
-        run: |
-          set -uo pipefail
-          mkdir -p "${{ runner.temp }}/rc"
-          # PIPESTATUS[0] preserves the runner's exit code through tee; a
-          # bare pipe would let a failing suite report a green step.
-          bin/adversarial-run 2>&1 | tee "${{ runner.temp }}/adversarial.log"
-          echo "${PIPESTATUS[0]}" > "${{ runner.temp }}/rc/adversarial"
           exit 0
 
       - name: Generate the HTML validation report
@@ -329,21 +329,6 @@ jobs:
           # reported as "unavailable", never silently dropped.
           RC_DIR="${{ runner.temp }}/rc"
           rc() { local f="$RC_DIR/$1"; [ -f "$f" ] && cat "$f" || echo "not-run"; }
-          # Debug annotations: surface rc values and sentinel lines where
-          # log downloads are unavailable.
-          for k in syntax blockset audit skip-assert composition-assert adversarial report; do
-            echo "::notice::rc/$k=$(rc "$k")"
-          done
-          if [ -f "${{ runner.temp }}/audit.log" ]; then
-            echo "::notice::audit-total=$(grep -a '^@@@ TOTAL ' "${{ runner.temp }}/audit.log" | tail -n 1 || echo MISSING)"
-          else
-            echo "::notice::audit-log=MISSING"
-          fi
-          if [ -f "${{ runner.temp }}/adversarial.log" ]; then
-            echo "::notice::adv-matched=$(grep -a '^@@@ ADV MATCHED ' "${{ runner.temp }}/adversarial.log" | tail -n 1 || echo MISSING)"
-          else
-            echo "::notice::adversarial-log=MISSING"
-          fi
           SYNTAX_RC="$(rc syntax)"; BLOCKSET_RC="$(rc blockset)"
           AUDIT_RC="$(rc audit)"; SKIP_RC="$(rc skip-assert)"
           COMP_RC="$(rc composition-assert)"
