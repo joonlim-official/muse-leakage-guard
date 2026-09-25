@@ -52,3 +52,9 @@ version|0|Upgraded to v1.2.3 last night
 # must not trip any secret shape. Both expect 0 by design.
 conf_8digit|0|Hotel confirmation 71284590, checkout 11 AM
 ticket_alnum|0|Promo inquiry reference ticket Q70234881
+# ssn_bare_gid is a false-positive shape from real usage (2026-09-24):
+# a Google Sheets ?gid=<9-digit> tab parameter in a subagent brief was
+# refused by the conservative bare-9-digit SSN rule (first real-world E3
+# hit; the brief re-gated clean 6s later without the gid). Expects 1 by
+# design — the block tier is never carved out for URL context.
+ssn_bare_gid|1|Open the shared schedule sheet: docs.google.com/spreadsheets/d/1Ab2Cd3Ef4Gh5Ij6Kl7Mn8Op9Qr0StUvWxYz/edit?gid=712845903
