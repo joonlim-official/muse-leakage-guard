@@ -33,8 +33,8 @@ owner's real installation or any private data.
   secret-shaped token by pattern); do not read its rc=2-on-unknown as the
   real tool's rc=1-on-unknown.
 - **Not protection.** Never deploy this directory as a protection layer,
-  never point it at real private data, never claim its 36/36 adversarial
-  figure as evidence of real detection quality. A 36/36 against this stub
+  never point it at real private data, never claim its 39/39 adversarial
+  figure as evidence of real detection quality. A 39/39 against this stub
   proves the *harness* is self-consistent — nothing more.
 - **Not the real gates.** It shares the CLI contract, never the detection
   logic (duplicated logic would let one bug silence both).

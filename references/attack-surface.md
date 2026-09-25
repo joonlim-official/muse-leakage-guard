@@ -336,7 +336,7 @@ Verdict key:
 
 - **Scenario:** A green CI run (or HTML report) against the synthetic stub
   is quoted as proof that the owner's real installation is protected.
-  The stub only exercises the harness against a test double: a 36/36
+  The stub only exercises the harness against a test double: a 39/39
   against the stub proves harness self-consistency, not detector quality.
 - **Conclusion:** PROTECTED (by labeling + refusal)
 - **Details:** The stub carries a `.synthetic-stub` marker

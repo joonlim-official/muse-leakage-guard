@@ -140,7 +140,7 @@ export PATH="<skill>/bin/shims:$PATH"
 
 ## What the audit does NOT promise
 
-- A 36/36 adversarial figure against the synthetic stub proves harness
+- A 39/39 adversarial figure against the synthetic stub proves harness
   self-consistency (the plumbing, parsing, and labels work), NOT detector
   quality. Only a run against the real installation speaks to protection.
 - The stub detector (`test/stub-memory-skill/bin/memory-egress-check`)

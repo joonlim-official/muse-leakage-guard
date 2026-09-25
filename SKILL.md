@@ -118,7 +118,7 @@ summary table to a stacked layout on narrow screens.
   `references/gate-interface.md`) — no private installation needed to
   validate the harness. The audit labels it `target-kind: SYNTHETIC STUB`
   (machine sentinel `STUBKIND`), refuses live-fire against it, and the
-  report banners it; a 36/36 against the stub proves harness
+  report banners it; a 39/39 against the stub proves harness
   self-consistency, not detector quality. Its detector classifies by
   lookup in a declared set of synthetic tokens
   (`build/build-blockset.sh`; `--check` in CI) — it is not a protection

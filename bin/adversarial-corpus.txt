@@ -57,4 +57,9 @@ ticket_alnum|0|Promo inquiry reference ticket Q70234881
 # refused by the conservative bare-9-digit SSN rule (first real-world E3
 # hit; the brief re-gated clean 6s later without the gid). Expects 1 by
 # design — the block tier is never carved out for URL context.
-ssn_bare_gid|1|Open the shared schedule sheet: docs.google.com/spreadsheets/d/1Ab2Cd3Ef4Gh5Ij6Kl7Mn8Op9Qr0StUvWxYz/edit?gid=712845903
+# The gid digits reuse an already-declared synthetic 9-digit fixture
+# value (bin/fixtures/SYNTHETIC.txt): the fixture-purity check requires
+# every secret-shaped corpus token to be declared, and the declaration file
+# cannot accept new secret-shaped lines through the egress gate, so new
+# bare-digit cases reuse declared synthetic values.
+ssn_bare_gid|1|Open the shared schedule sheet: docs.google.com/spreadsheets/d/1Ab2Cd3Ef4Gh5Ij6Kl7Mn8Op9Qr0StUvWxYz/edit?gid=123456789

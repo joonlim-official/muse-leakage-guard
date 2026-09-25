@@ -839,7 +839,13 @@ stdin_probe "memory-egress-check: idle-pipe stdin is clean, no hang" "$MEM_SKILL
 # never the installation's real ones.
 printf '%s\n' 'MU ~\$[0-9,]+(\.[0-9]+)?' > "$T/pp.txt"
 printf 'MU ~$977 after the news\n' > "$T/market.txt"
-printf 'MU ~$977 after the news\nsk_live_4eC39HqLyjWDarjtT1zZzZzZzZz\n' > "$T/market-secret.txt"
+# The "patterns never exempt secrets" probe must use a DECLARED synthetic
+# block-tier token (first want=1 adversarial-corpus case): the stub target
+# blocks by lookup in its declared set, so an arbitrary secret-shaped
+# literal would only fail closed to review-tier (rc=2) there — while the
+# real target blocks any secret shape. A declared token gives rc=1 on both.
+declared_block="$(grep -v '^[[:space:]]*#' "$SKILL_DIR/bin/adversarial-corpus.txt" | grep -m1 '|1|' | cut -d'|' -f3-)"
+printf '%s\n' 'MU ~$977 after the news' "$declared_block" > "$T/market-secret.txt"
 pp_expect() { # <name> <file> <want_rc> <gate: guard|egress>
   local name="$1" f="$2" want="$3" gate="$4" rc gatebin
   if [ "$gate" = guard ]; then gatebin="$MEM_SKILL/bin/memory-guard"

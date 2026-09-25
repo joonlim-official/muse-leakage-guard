@@ -6,6 +6,9 @@
 # (references/gate-interface.md, interface version 1):
 #   bin/memory-egress-check [file ...]      — scan files
 #   ... | bin/memory-egress-check            — scan stdin
+#   bin/memory-egress-check                  — no args: probe stdin with a
+#     timeout; an idle pipe (cron, $(...)) is empty input, clean by
+#     definition — never hang on `cat` (2026-09-22).
 # Exit 0 = clean, 1 = block-tier, 2 = review-tier.
 #
 # How it decides: candidates are extracted with the public shape patterns
@@ -16,6 +19,12 @@
 # A candidate NOT in the set — any other secret/figure/phone-shaped text —
 # is review-tier (exit 2, fail closed): this stub must never auto-allow a
 # shape it was not explicitly told is synthetic. Clean input exits 0.
+#
+# Env:
+#   MEMORY_PUBLIC_PATTERNS    file of ERE patterns, one per line (# comments,
+#     invalid patterns skipped); figure- and phone-shaped LINES matching any
+#     pattern leave the review tier (mirrors the real tool). The block tier
+#     is computed on the raw input first and is never affected.
 #
 # Because the verdict is a lookup in an explicit allow-set, the STUB'S OWN
 # audit fixtures are classified like this:
@@ -37,9 +46,36 @@ if [ $# -gt 0 ]; then
   # trailing newline would fuse its last token with the next file's first
   # token, creating phantom tokens (or hiding real ones at the boundary).
   for f in "$@"; do [ -f "$f" ] || die "not a file: $f"; { cat "$f"; printf '\n'; } >> "$INPUT"; done
-else
-  cat > "$INPUT"
+elif [ ! -t 0 ] && IFS= read -r -t 2 _firstline <&0; then
+  # Piped draft. The timeout probe keeps a no-args invocation on an idle
+  # pipe (cron, $(...)) from hanging on `cat` forever — the same class of
+  # hang fixed in memory-guard on 2026-09-22. Empty input is clean by
+  # definition.
+  printf '%s\n' "$_firstline" > "$INPUT"
+  cat >> "$INPUT"
 fi
+
+# Public literal CLASSES the auditor ruled public (MEMORY_PUBLIC_PATTERNS,
+# one ERE per line, # comments; invalid patterns skipped). Review-tier
+# lines matching any valid pattern are exempted. The block tier below ran
+# on the raw input and is never affected.
+PP_FILE=""
+_pp_tmp=""
+_pubpat="${MEMORY_PUBLIC_PATTERNS:-/dev/null}"
+if [ -s "$_pubpat" ]; then
+  _pp_tmp="$(mktemp)"
+  while IFS= read -r pp || [ -n "$pp" ]; do
+    case "$pp" in \#*|'') continue;; esac
+    grep -qE -- "$pp" /dev/null 2>/dev/null
+    [ "$?" -ne 2 ] && printf '%s\n' "$pp" >> "$_pp_tmp"
+  done < "$_pubpat"
+  if [ -s "$_pp_tmp" ]; then PP_FILE="$_pp_tmp"; else rm -f "$_pp_tmp"; fi
+fi
+[ -n "$PP_FILE" ] && trap 'rm -f "$INPUT" "$PP_FILE"' EXIT
+pp_exempt() { # <line> — 0 if the line matches a public pattern
+  [ -n "$PP_FILE" ] || return 1
+  grep -qE -f "$PP_FILE" <<< "$1" 2>/dev/null
+}
 
 worst=0   # 0 clean < 2 review < 1 block (block wins over review)
 secret_hits=0
@@ -54,11 +90,16 @@ while IFS= read -r cand; do
   fi
 done < <(grep -oE "$STUB_SECRET_CAND" "$INPUT" || true)
 
-if grep -qE "$STUB_FIGURE_CAND" "$INPUT" 2>/dev/null; then
-  [ "$worst" -ne 1 ] && worst=2
-fi
-if grep -qE "$STUB_PHONE_CAND" "$INPUT" 2>/dev/null; then
-  [ "$worst" -ne 1 ] && worst=2
+# Figure- and phone-shaped candidates: review-tier unless the line is
+# covered by a public pattern. Line-scoped, like the real tool.
+if grep -qE "$STUB_FIGURE_CAND|$STUB_PHONE_CAND" "$INPUT" 2>/dev/null; then
+  if [ "$worst" -ne 1 ]; then
+    fp_exempted=1
+    while IFS= read -r line; do
+      pp_exempt "$line" || fp_exempted=0
+    done < <(grep -E "$STUB_FIGURE_CAND|$STUB_PHONE_CAND" "$INPUT" || true)
+    [ "$fp_exempted" -eq 1 ] || worst=2
+  fi
 fi
 
 case "$worst" in
