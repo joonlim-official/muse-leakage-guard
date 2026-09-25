@@ -55,10 +55,11 @@ jobs:
       MOCHI_AGENTS_FILE: ${{ github.workspace }}/test/stub-memory-skill/AGENTS.md
       CI: "true"
       # NOTE: MOCHI_EGRESS_LOG is intentionally NOT set here. The `runner`
-      # context is unavailable in job-level `env:` — GitHub rejects the whole
-      # workflow ("No jobs were run", run marked failed) — so it is set
-      # per-step on the two steps that invoke the gates (audit, report),
-      # where the `runner` context IS allowed.
+      # context is unavailable in job-level `env:` — and in step-level
+      # `env:` too — GitHub rejects the whole workflow at "Set up job"
+      # ("No jobs were run", run marked failed). It is exported inside the
+      # `run:` scripts of the two steps that invoke the gates (audit,
+      # report), where the `runner` context IS allowed (via $RUNNER_TEMP).
     steps:
       - name: Check out the repo (shallow, no credentials)
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -159,13 +160,15 @@ jobs:
       - name: Run the leakage audit against the synthetic stub
         if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
         timeout-minutes: 10
-        env:
-          # Step-level env (not job-level): the `runner` context is allowed
-          # here but not in job-level `env:`.
-          MOCHI_EGRESS_LOG: ${{ runner.temp }}/egress-gate.log
         run: |
           set -uo pipefail
           mkdir -p "${{ runner.temp }}/rc"
+          # MOCHI_EGRESS_LOG is exported here (not in env:): the `runner`
+          # context is unavailable in step-level `env:` too — GitHub
+          # rejects the whole workflow at "Set up job" ("No jobs were
+          # run"). It IS available in `run:` scripts. $RUNNER_TEMP is the
+          # runner-provided env var for the same directory.
+          export MOCHI_EGRESS_LOG="$RUNNER_TEMP/egress-gate.log"
           # Fail-at-the-end: capture the audit's own exit code explicitly
           # (PIPESTATUS, not pipefail) so a red audit still yields logs and
           # the report, and the job outcome is decided by the final assert
@@ -277,13 +280,12 @@ jobs:
         id: report
         if: always() && steps.refuse-livefire.outcome == 'success' && steps.refuse-localenv.outcome == 'success'
         timeout-minutes: 15
-        env:
-          # Step-level env (not job-level): the `runner` context is allowed
-          # here but not in job-level `env:`.
-          MOCHI_EGRESS_LOG: ${{ runner.temp }}/egress-gate.log
         run: |
           set -uo pipefail
           mkdir -p "${{ runner.temp }}/rc"
+          # Same runner-context rule as the audit step above: MOCHI_EGRESS_LOG
+          # is exported here, not in env:.
+          export MOCHI_EGRESS_LOG="$RUNNER_TEMP/egress-gate.log"
           export PATH="$PERSONAL_MEMORY_SKILL/bin/shims:$PATH"
           # Exit 1 (findings/mismatches) still writes the report — that is
           # the point of fail-at-the-end. Only 2/3 (refused/tooling
