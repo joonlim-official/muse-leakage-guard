@@ -315,7 +315,7 @@ done
 # Fixture integrity: a missing or empty fixture makes its check vacuous
 # (an empty "clean" fixture passes trivially; a missing block-tier fixture
 # can error into a misleading verdict). Fail closed on fixture rot.
-for fix in clean.txt secret.txt secret2.txt ssn.txt card.txt figure.txt phone.txt; do
+for fix in clean.txt secret.txt secret2.txt ssn.txt card.txt figure.txt phone.txt figure-prefix.txt figure-45.txt; do
   if [ ! -f "$FIX/$fix" ]; then bad "fixture $fix missing" "" "restore bin/fixtures/$fix from the repo, then re-run this audit."
   elif [ ! -s "$FIX/$fix" ]; then bad "fixture $fix is empty (vacuous test)" "" "restore the fixture content from the repo, then re-run this audit."
   else ok "fixture $fix present and non-empty"; fi
@@ -803,6 +803,13 @@ guard_expect "phone flagged for review" phone.txt 2
 guard_expect "clean passes" clean.txt 0
 printf '%s\n' "$(cat "$FIX/figure.txt")" > "$T/allow-figure.txt"
 guard_expect "allowlisted figure exempted" figure.txt 0 "$T/allow-figure.txt"
+# Allowlist prefix masking (2026-11-07): a short allowlisted literal must
+# not exempt a longer figure sharing its prefix — the $45 clinic-fee entry
+# silently dropped the $455 Galaxy invoice lines from the review report.
+# memory-guard now matches allowlist entries whole-word (-w).
+printf '%s\n' '$45' > "$T/allow-45.txt"
+guard_expect "allowlist prefix does not exempt longer figure (\$455 still flagged)" figure-prefix.txt 2 "$T/allow-45.txt"
+guard_expect "allowlisted figure still exempted (\$45)" figure-45.txt 0 "$T/allow-45.txt"
 printf '%s\n' "$(cat "$FIX/secret.txt")" > "$T/allow-secret.txt"
 guard_expect "allowlisted secret still blocked (allowlist never exempts secrets)" secret.txt 1 "$T/allow-secret.txt"
 # No-args stdin modes (2026-09-22 regression): a no-args invocation whose
