@@ -252,15 +252,22 @@ jobs:
           # the fixture-purity check and the blockset stay consistent)
           # — stub target: 98 checks
           # total, still 4 pinned CI skips; adversarial corpus: 39 cases.
+          # Then the 2026-11-07 allowlist prefix-masking iteration: two new
+          # fixture-integrity checks (figure-prefix.txt, figure-45.txt) and
+          # two new write-time guard probes (a $45 allowlist entry must not
+          # exempt a $455 line; a $45 line stays exempt), with the stub
+          # guard's allow_hit switched to whole-word matching to mirror the
+          # real tool — stub target: 106 checks total, 102 passed in CI,
+          # still 4 pinned CI skips; adversarial corpus unchanged at 39.
           fail=0
           if [ ! -f "${{ runner.temp }}/audit.log" ]; then
             echo "validate: FAIL — audit.log missing (audit did not run)" >&2; fail=1
           else
             t="$(grep -a '^@@@ TOTAL ' "${{ runner.temp }}/audit.log" | tail -n 1 || true)"
-            if [ "$t" = "@@@ TOTAL 98 0 4" ]; then
-              echo "validate: audit composition pinned (98 passed · 0 failed · 4 skipped)"
+            if [ "$t" = "@@@ TOTAL 102 0 4" ]; then
+              echo "validate: audit composition pinned (102 passed · 0 failed · 4 skipped)"
             else
-              echo "validate: FAIL — expected '@@@ TOTAL 98 0 4', got '$t'" >&2; fail=1
+              echo "validate: FAIL — expected '@@@ TOTAL 102 0 4', got '$t'" >&2; fail=1
             fi
           fi
           if [ ! -f "${{ runner.temp }}/adversarial.log" ]; then
@@ -366,7 +373,7 @@ jobs:
           fi
 
           comp_detail="composition figures unavailable — see step log"
-          comp_detail="$( [ -f "$RC_DIR/composition-assert" ] && [ "$(cat "$RC_DIR/composition-assert")" = "0" ] && echo "audit 98/0/4 + adversarial 39/39 pinned" || echo "$comp_detail" )"
+          comp_detail="$( [ -f "$RC_DIR/composition-assert" ] && [ "$(cat "$RC_DIR/composition-assert")" = "0" ] && echo "audit 102/0/4 + adversarial 39/39 pinned" || echo "$comp_detail" )"
 
           rep_detail="report not generated"
           if [ "${{ steps.report.outputs.report_exists }}" = "true" ]; then

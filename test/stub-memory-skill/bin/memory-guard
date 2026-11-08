@@ -33,8 +33,9 @@
 #
 # Env:
 #   MEMORY_FIGURE_ALLOWLIST   file of fixed-string patterns, one per line;
-#     figure- and phone-shaped matches containing any pattern are excluded
-#     (mirrors the real tool). Secrets are NEVER exempted by the allowlist.
+#     figure- and phone-shaped matches containing a pattern as a whole word
+#     are excluded (mirrors the real tool, 2026-11-07). Secrets are NEVER
+#     exempted by the allowlist.
 #   MEMORY_PUBLIC_PATTERNS    file of ERE patterns, one per line (# comments,
 #     invalid patterns skipped); figure- and phone-shaped LINES matching any
 #     pattern leave the review tier (mirrors the real tool). The block tier
@@ -107,7 +108,10 @@ allow_hit() { # <line> — 0 if the line matches an allowlist pattern
   local pat line="$1"
   while IFS= read -r pat; do
     case "$pat" in ''|'#'*) continue;; esac
-    case "$line" in *"$pat"*) return 0;; esac
+    # Whole-word fixed-string match (grep -wF), mirroring the real tool
+    # (2026-11-07): a bare substring match lets a short allowlisted literal
+    # mask a longer figure sharing its prefix ($45 exempting $455).
+    if grep -qwF -- "$pat" <<< "$line"; then return 0; fi
   done < "$ALLOWLIST"
   return 1
 }
